@@ -1,0 +1,32 @@
+{
+  "name": "openai-realtime-chat",
+  "version": "1.0.0",
+  "description": "Real-time chat application with OpenAI",
+  "main": "chat.js",
+  "type": "module",
+  "scripts": {
+    "start": "source venv/bin/activate && node chat.js",
+    "setup": "chmod +x setup.sh && ./setup.sh",
+    "test-wake": "source venv/bin/activate && python3 openwakeword_detector.py",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "openai",
+    "chat",
+    "voice",
+    "realtime"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dayjs": "^1.11.13",
+    "dotenv": "^16.3.1",
+    "express": "^4.21.2",
+    "google-auth-library": "^9.15.0",
+    "googleapis": "^144.0.0",
+    "node-fetch": "^3.3.2",
+    "node-record-lpcm16": "^1.0.1",
+    "speaker": "^0.5.4",
+    "ws": "^8.16.0"
+  }
+}
