@@ -141,60 +141,20 @@ export class AudioHandler {
   }
 
   /**
-   * Cleans up the speaker instance and resets audio states
-   * @param {Function} [callback] Optional callback after cleanup
-   * @private
+   * Finalize audio playback when we know no more audio is coming
    */
-  cleanupSpeaker(callback) {
-    if (this.isCleaningUp) {
-      if (callback) callback();
-      return;
-    }
-
-    if (this.speaker) {
-      this.isCleaningUp = true;
-      this.isPlaying = false;
-      this.audioQueue = [];
-
-      const cleanup = () => {
-        this.speaker = null;
-        this.speakerInitialized = false;
-        this.isCleaningUp = false;
-        if (callback) callback();
-      };
-
-      try {
-        this.speaker.removeAllListeners('error');
-        this.speaker.removeAllListeners('close');
-        this.speaker.once('close', cleanup);
-        this.speaker.once('error', (err) => {
-          const ignoredErrors = [
-            'buffer underflow',
-            'write after end',
-            'not running',
-            "Didn't have any audio data in callback (buffer underflow)"
-          ];
-          if (!ignoredErrors.some(msg => err.message.includes(msg))) {
-            console.error('Error during speaker cleanup:', err.message);
-          }
-          cleanup();
+  finalizeAudioPlayback() {
+    if (this.speaker && this.speakerInitialized) {
+      // Process any remaining audio in the queue
+      if (this.audioQueue.length > 0) {
+        const finalChunk = Buffer.concat(this.audioQueue);
+        this.audioQueue = [];
+        this.speaker.write(finalChunk, () => {
+          this.speaker.end();
         });
-        // Force-end
+      } else {
         this.speaker.end();
-      } catch (err) {
-        const ignoredErrors = [
-          'buffer underflow',
-          'write after end',
-          'not running',
-          "Didn't have any audio data in callback (buffer underflow)"
-        ];
-        if (!ignoredErrors.some(msg => err.message.includes(msg))) {
-          console.error('Error ending speaker:', err.message);
-        }
-        cleanup();
       }
-    } else {
-      if (callback) callback();
     }
   }
 
@@ -217,74 +177,23 @@ export class AudioHandler {
 
         this.isPlaying = true;
 
-        // Combine small chunks
-        let combinedChunks = Buffer.alloc(0);
-        const targetSize = 1024 * 256; // Increased target size for larger chunks
-        while (this.audioQueue.length > 0 && combinedChunks.length < targetSize) {
-          combinedChunks = Buffer.concat([
-            combinedChunks,
-            this.audioQueue.shift()
-          ]);
-        }
-
-        // If there's no data, skip
-        if (combinedChunks.length === 0) {
-          console.log('No audio data to play, skipping playback...');
-          this.isPlaying = false;
-          if (!this.chat.isWaitingForResponse) {
-            this.cleanupSpeaker(() => {
-              if (this.continuousMode && !this.recording && !this.isPlaying && !this.speaker) {
-                console.log('\nRestarting recording in continuous mode...');
-                this.startRecording();
-              }
-            });
-          }
-          return;
-        }
+        const chunk = this.audioQueue.shift();
 
         try {
           if (!this.isCleaningUp) {
-            this.speaker.write(combinedChunks, (err) => {
-              const ignoredErrors = [
-                'buffer underflow',
-                'write after end',
-                'not running',
-                "Didn't have any audio data in callback (buffer underflow)"
-              ];
-              if (err && !ignoredErrors.some(msg => err.message.includes(msg))) {
-                console.error('Error playing audio:', err.message);
-              }
-
-              if (!this.isPlaying || this.isCleaningUp) {
-                return;
-              }
-
+            this.speaker.write(chunk, () => {
               this.isPlaying = false;
-
-              if (this.audioQueue.length > 0 && this.speaker && !this.isCleaningUp) {
-                // Reduced delay between chunks
-                setTimeout(() => this.processAudioQueue(), 10);
-              } else if (!this.chat.isWaitingForResponse) {
-                this.cleanupSpeaker(() => {
-                  if (this.continuousMode && !this.recording && !this.isPlaying && !this.speaker) {
-                    console.log('\nRestarting recording in continuous mode...');
-                    this.startRecording();
-                  }
-                });
+              if (this.audioQueue.length > 0) {
+                setImmediate(() => this.processAudioQueue());
               }
             });
           }
         } catch (err) {
-          const ignoredErrors = [
-            'buffer underflow',
-            'write after end',
-            'not running',
-            "Didn't have any audio data in callback (buffer underflow)"
-          ];
-          if (!ignoredErrors.some(msg => err.message.includes(msg))) {
-            console.error('Error in audio processing:', err.message);
+          console.error('Error in audio processing:', err);
+          this.isPlaying = false;
+          if (!this.chat.isWaitingForResponse) {
+            this.cleanupSpeaker();
           }
-          this.cleanupSpeaker();
         }
       }
     }
@@ -297,12 +206,16 @@ export class AudioHandler {
   initializeSpeaker() {
     if (!this.speakerInitialized && !this.isCleaningUp) {
       try {
+        if (this.speaker) {
+          this.cleanupSpeaker();
+        }
+
         this.speaker = new Speaker({
           channels: 1,
           bitDepth: 16,
-          sampleRate: 24000,  // 24kHz for natural playback
-          highWaterMark: 1024 * 1024,  // Large buffer for smooth playback
-          lowWaterMark: 1024 * 256     // Minimum buffer size
+          sampleRate: 24000,
+          highWaterMark: 1024 * 512,  // Reduced buffer size
+          lowWaterMark: 1024 * 128    // Reduced minimum buffer size
         });
 
         this.speaker.on('error', (err) => {
@@ -315,18 +228,65 @@ export class AudioHandler {
           if (!ignoredErrors.some(msg => err.message.includes(msg))) {
             console.error('Speaker error:', err);
           }
+          // Always cleanup on error to prevent hanging
+          this.cleanupSpeaker();
         });
 
         this.speaker.on('close', () => {
           this.speakerInitialized = false;
           this.isPlaying = false;
+          // Reset the speaker instance
+          this.speaker = null;
         });
 
         this.speakerInitialized = true;
       } catch (err) {
         console.error('Failed to initialize speaker:', err);
         this.speakerInitialized = false;
+        this.speaker = null;
       }
+    }
+  }
+
+  /**
+   * Clean up speaker instance and reset audio states
+   * @param {Function} [callback] Optional callback after cleanup
+   * @private
+   */
+  cleanupSpeaker(callback) {
+    if (this.isCleaningUp) {
+      if (callback) callback();
+      return;
+    }
+
+    if (this.speaker) {
+      this.isCleaningUp = true;
+      this.isPlaying = false;
+
+      const cleanup = () => {
+        if (this.speaker) {
+          this.speaker.removeAllListeners();
+          this.speaker = null;
+        }
+        this.speakerInitialized = false;
+        this.isCleaningUp = false;
+        this.audioQueue = [];
+        if (callback) callback();
+      };
+
+      try {
+        if (this.speaker) {
+          this.speaker.end();
+          this.speaker.once('close', cleanup);
+        } else {
+          cleanup();
+        }
+      } catch (err) {
+        console.error('Error during speaker cleanup:', err);
+        cleanup();
+      }
+    } else {
+      if (callback) callback();
     }
   }
 
