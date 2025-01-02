@@ -238,8 +238,8 @@ export class FunctionHandler {
         success: true,
         mode: enabled ? 'enabled' : 'disabled',
         message: enabled 
-          ? "I've enabled continuous mode. This means I'll automatically start listening after each response. You can just speak naturally without saying 'Hey Jarvis' each time. To exit continuous mode, just say 'disable continuous mode' or press X."
-          : "Continuous mode has been disabled. You'll need to say 'Hey Jarvis' to start each conversation."
+          ? "I've enabled continuous mode. This means I'll automatically start listening after each response. You can just speak naturally  each time. To exit continuous mode, just say 'disable continuous mode' or press X."
+          : "Continuous mode has been disabled."
       };
 
       this.sendFunctionResult('set_continuous_mode', result, args._call_id);

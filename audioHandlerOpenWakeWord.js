@@ -40,6 +40,13 @@ export class AudioHandler {
     this.isCleaningUp = false;
     this.speechDetected = false;
     this.pendingStopRecording = false;
+    
+    // Audio buffering settings
+    this.minBufferSize = 1024 * 256;  // Minimum size before starting playback
+    this.chunkSize = 1024 * 64;       // Size of chunks to write
+    this.preBuffering = true;         // Start in pre-buffering state
+    this.endDelay = 500;              // Delay before ending stream (ms)
+    this.pendingEnd = false;          // Track if we're waiting to end
 
     // Additional modes/flags
     this.continuousMode = false;
@@ -141,20 +148,51 @@ export class AudioHandler {
   }
 
   /**
-   * Finalize audio playback when we know no more audio is coming
+   * Cleans up the speaker instance and resets audio states
+   * @param {Function} [callback] Optional callback after cleanup
+   * @private
    */
-  finalizeAudioPlayback() {
-    if (this.speaker && this.speakerInitialized) {
-      // Process any remaining audio in the queue
-      if (this.audioQueue.length > 0) {
-        const finalChunk = Buffer.concat(this.audioQueue);
-        this.audioQueue = [];
-        this.speaker.write(finalChunk, () => {
+  cleanupSpeaker(callback) {
+    if (this.isCleaningUp) {
+      if (callback) callback();
+      return;
+    }
+
+    if (this.speaker) {
+      this.isCleaningUp = true;
+      this.isPlaying = false;
+      this.audioQueue = [];
+
+      const cleanup = () => {
+        if (this.speaker) {
+          // Wait for the speaker to finish naturally
+          this.speaker.on('finish', () => {
+            this.speaker.removeAllListeners();
+            this.speaker.close(() => {
+              this.speaker = null;
+              this.speakerInitialized = false;
+              this.isCleaningUp = false;
+              if (callback) callback();
+            });
+          });
+          
+          // End the stream to trigger 'finish' event
           this.speaker.end();
-        });
+        } else {
+          this.speakerInitialized = false;
+          this.isCleaningUp = false;
+          if (callback) callback();
+        }
+      };
+
+      // If there's data still being written, wait for it to drain
+      if (this.speaker.writableLength > 0) {
+        this.speaker.once('drain', cleanup);
       } else {
-        this.speaker.end();
+        cleanup();
       }
+    } else {
+      if (callback) callback();
     }
   }
 
@@ -177,24 +215,119 @@ export class AudioHandler {
 
         this.isPlaying = true;
 
-        const chunk = this.audioQueue.shift();
+        // Calculate total buffered data
+        const totalBuffered = this.audioQueue.reduce((sum, chunk) => sum + chunk.length, 0);
 
-        try {
-          if (!this.isCleaningUp) {
-            this.speaker.write(chunk, () => {
-              this.isPlaying = false;
-              if (this.audioQueue.length > 0) {
-                setImmediate(() => this.processAudioQueue());
-              }
-            });
+        // If in pre-buffering mode, wait until we have enough data
+        if (this.preBuffering && totalBuffered < this.minBufferSize && this.chat.isWaitingForResponse) {
+          this.isPlaying = false;
+          setTimeout(() => this.processAudioQueue(), 50);
+          return;
+        }
+        this.preBuffering = false;
+
+        // Process chunks in smaller sizes
+        let chunk;
+        if (totalBuffered > this.chunkSize) {
+          chunk = Buffer.alloc(0);
+          while (chunk.length < this.chunkSize && this.audioQueue.length > 0) {
+            chunk = Buffer.concat([chunk, this.audioQueue.shift()]);
           }
-        } catch (err) {
-          console.error('Error in audio processing:', err);
+        } else if (!this.chat.isWaitingForResponse) {
+          // Final message, use all remaining data
+          chunk = Buffer.concat(this.audioQueue);
+          this.audioQueue = [];
+        } else {
+          // Not enough data and still waiting for more
+          this.isPlaying = false;
+          setTimeout(() => this.processAudioQueue(), 50);
+          return;
+        }
+
+        if (chunk.length === 0) {
           this.isPlaying = false;
           if (!this.chat.isWaitingForResponse) {
+            // Wait for the speaker to finish naturally
+            this.speaker.on('finish', () => {
+              this.cleanupSpeaker(() => {
+                if (this.continuousMode && !this.recording && !this.isPlaying && !this.speaker) {
+                  console.log('\nRestarting recording in continuous mode...');
+                  this.startRecording();
+                }
+              });
+            });
+            
+            // End the stream to trigger 'finish' event
+            this.speaker.end();
+          }
+          return;
+        }
+
+        const playChunk = () => {
+          try {
+            if (!this.isCleaningUp && this.speaker) {
+              const canWrite = this.speaker.write(chunk, (err) => {
+                if (err) {
+                  const ignoredErrors = [
+                    'buffer underflow',
+                    'write after end',
+                    'not running',
+                    "Didn't have any audio data in callback (buffer underflow)"
+                  ];
+                  if (!ignoredErrors.some(msg => err.message?.includes(msg))) {
+                    console.error('Error playing audio:', err);
+                  }
+                }
+
+                if (!this.isPlaying || this.isCleaningUp) return;
+
+                // Reset pre-buffering state when response is complete
+                if (!this.chat.isWaitingForResponse) {
+                  this.preBuffering = true;
+                }
+
+                this.isPlaying = false;
+                
+                if (this.audioQueue.length > 0 && !this.isCleaningUp) {
+                  setTimeout(() => this.processAudioQueue(), 10);
+                } else if (!this.chat.isWaitingForResponse) {
+                  // Wait for the speaker to finish naturally
+                  this.speaker.on('finish', () => {
+                    this.cleanupSpeaker(() => {
+                      if (this.continuousMode && !this.recording && !this.isPlaying && !this.speaker) {
+                        console.log('\nRestarting recording in continuous mode...');
+                        this.startRecording();
+                      } else {
+                        // Re-enable wake word detection if not in continuous mode
+                        this.isListeningForWakeWord = !this.continuousMode;
+                      }
+                    });
+                  });
+                  
+                  // End the stream to trigger 'finish' event
+                  this.speaker.end();
+                }
+              });
+
+              if (!canWrite) {
+                this.speaker.once('drain', playChunk);
+              }
+            }
+          } catch (err) {
+            const ignoredErrors = [
+              'buffer underflow',
+              'write after end',
+              'not running',
+              "Didn't have any audio data in callback (buffer underflow)"
+            ];
+            if (!ignoredErrors.some(msg => err.message?.includes(msg))) {
+              console.error('Error in audio processing:', err);
+            }
             this.cleanupSpeaker();
           }
-        }
+        };
+
+        playChunk();
       }
     }
   }
@@ -214,8 +347,11 @@ export class AudioHandler {
           channels: 1,
           bitDepth: 16,
           sampleRate: 24000,
-          highWaterMark: 1024 * 512,  // Reduced buffer size
-          lowWaterMark: 1024 * 128    // Reduced minimum buffer size
+          highWaterMark: 1024 * 512,  // Balanced buffer size
+          lowWaterMark: 1024 * 256,   // Increased minimum threshold
+          deviceId: 'default',         // Explicitly use default device
+          format: 'S16LE',            // Explicit format for better compatibility
+          signed: true                // Ensure signed audio data
         });
 
         this.speaker.on('error', (err) => {
@@ -249,48 +385,6 @@ export class AudioHandler {
   }
 
   /**
-   * Clean up speaker instance and reset audio states
-   * @param {Function} [callback] Optional callback after cleanup
-   * @private
-   */
-  cleanupSpeaker(callback) {
-    if (this.isCleaningUp) {
-      if (callback) callback();
-      return;
-    }
-
-    if (this.speaker) {
-      this.isCleaningUp = true;
-      this.isPlaying = false;
-
-      const cleanup = () => {
-        if (this.speaker) {
-          this.speaker.removeAllListeners();
-          this.speaker = null;
-        }
-        this.speakerInitialized = false;
-        this.isCleaningUp = false;
-        this.audioQueue = [];
-        if (callback) callback();
-      };
-
-      try {
-        if (this.speaker) {
-          this.speaker.end();
-          this.speaker.once('close', cleanup);
-        } else {
-          cleanup();
-        }
-      } catch (err) {
-        console.error('Error during speaker cleanup:', err);
-        cleanup();
-      }
-    } else {
-      if (callback) callback();
-    }
-  }
-
-  /**
    * Handle wake word detection
    * @private
    */
@@ -315,6 +409,8 @@ export class AudioHandler {
       return;
     }
 
+    // Disable wake word detection while recording
+    this.isListeningForWakeWord = false;
     this.speechDetected = false;
     this.pendingStopRecording = false;
 
@@ -366,23 +462,17 @@ export class AudioHandler {
    */
   stopRecording() {
     if (!this.recording) return;
-
-    console.log('\nStopped recording');
-
-    if (this.chat.ws && this.chat.ws.readyState === 1 && this.audioBuffer.length > 0) {
-      this.chat.ws.send(JSON.stringify({
-        type: 'input_audio_buffer.append',
-        audio: this.audioBuffer.toString('base64')
-      }));
-      this.chat.ws.send(JSON.stringify({
-        type: 'input_audio_buffer.commit'
-      }));
-      console.log('Audio committed to server');
+    
+    this.pendingStopRecording = true;
+    if (this.recording) {
+      this.recording.stop();
+      this.recording = null;
     }
 
-    this.recording.stop();
-    this.recording = null;
-    this.audioBuffer = Buffer.alloc(0);
+    // Re-enable wake word detection unless in continuous mode
+    if (!this.continuousMode) {
+      this.isListeningForWakeWord = true;
+    }
   }
 
   /**
@@ -392,12 +482,18 @@ export class AudioHandler {
     this.continuousMode = !this.continuousMode;
     if (this.continuousMode) {
       console.log('\nContinuous conversation mode enabled');
-      if (!this.recording && !this.chat.isWaitingForResponse && !this.isPlaying) {
-        console.log('Starting recording in continuous mode...');
+      // Disable wake word detection in continuous mode
+      this.isListeningForWakeWord = false;
+      if (!this.recording && !this.isPlaying) {
         this.startRecording();
       }
     } else {
       console.log('\nContinuous conversation mode disabled');
+      // Re-enable wake word detection when exiting continuous mode
+      this.isListeningForWakeWord = true;
+      if (this.recording) {
+        this.stopRecording();
+      }
     }
   }
 
@@ -491,20 +587,18 @@ export class AudioHandler {
       this.wakeWordProcess = null;
     }
 
-    // Stop recording if active
     if (this.recording) {
       this.recording.stop();
       this.recording = null;
     }
 
-    // Clear audio buffer
-    this.audioBuffer = Buffer.alloc(0);
-
-    // Clean up speaker
-    this.cleanupSpeaker();
-
-    // Clear audio queue
-    this.audioQueue = [];
+    // Re-enable wake word detection when cleaning up
+    this.isListeningForWakeWord = true;
+    this.continuousMode = false;
+    
+    if (this.speaker) {
+      this.cleanupSpeaker();
+    }
   }
 
   /**

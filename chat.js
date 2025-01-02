@@ -119,8 +119,6 @@ class ConsoleChat {
             console.log('\n--- Response complete ---');
             this.isWaitingForResponse = false;
             this.responseId = null;
-            // Signal audio handler that no more audio is coming
-            this.audioHandler.finalizeAudioPlayback();
           }
           break;
 
@@ -291,7 +289,7 @@ class ConsoleChat {
           turn_detection: {
             type: "server_vad",
             threshold: 0.8,
-            silence_duration_ms: 2000,
+            silence_duration_ms: 1000,
             prefix_padding_ms: 300,
             create_response: true
           },
