@@ -163,21 +163,15 @@ export class AudioHandler {
       this.isPlaying = false;
       this.audioQueue = [];
 
-      const cleanup = () => {
+      const onFinish = () => {
         if (this.speaker) {
-          // Wait for the speaker to finish naturally
-          this.speaker.on('finish', () => {
-            this.speaker.removeAllListeners();
-            this.speaker.close(() => {
-              this.speaker = null;
-              this.speakerInitialized = false;
-              this.isCleaningUp = false;
-              if (callback) callback();
-            });
+          this.speaker.removeAllListeners();
+          this.speaker.close(() => {
+            this.speaker = null;
+            this.speakerInitialized = false;
+            this.isCleaningUp = false;
+            if (callback) callback();
           });
-          
-          // End the stream to trigger 'finish' event
-          this.speaker.end();
         } else {
           this.speakerInitialized = false;
           this.isCleaningUp = false;
@@ -185,11 +179,14 @@ export class AudioHandler {
         }
       };
 
-      // If there's data still being written, wait for it to drain
       if (this.speaker.writableLength > 0) {
-        this.speaker.once('drain', cleanup);
+        this.speaker.once('drain', () => {
+          this.speaker.once('finish', onFinish);
+          this.speaker.end();
+        });
       } else {
-        cleanup();
+        this.speaker.once('finish', onFinish);
+        this.speaker.end();
       }
     } else {
       if (callback) callback();
@@ -207,7 +204,6 @@ export class AudioHandler {
       }
 
       if (this.speaker) {
-        // If we are currently recording, stop before playback
         if (this.recording && !this.isPlaying) {
           console.log('\nPausing recording for audio playback');
           this.finishRecording();
@@ -215,10 +211,8 @@ export class AudioHandler {
 
         this.isPlaying = true;
 
-        // Calculate total buffered data
         const totalBuffered = this.audioQueue.reduce((sum, chunk) => sum + chunk.length, 0);
 
-        // If in pre-buffering mode, wait until we have enough data
         if (this.preBuffering && totalBuffered < this.minBufferSize && this.chat.isWaitingForResponse) {
           this.isPlaying = false;
           setTimeout(() => this.processAudioQueue(), 50);
@@ -226,7 +220,6 @@ export class AudioHandler {
         }
         this.preBuffering = false;
 
-        // Process chunks in smaller sizes
         let chunk;
         if (totalBuffered > this.chunkSize) {
           chunk = Buffer.alloc(0);
@@ -234,11 +227,9 @@ export class AudioHandler {
             chunk = Buffer.concat([chunk, this.audioQueue.shift()]);
           }
         } else if (!this.chat.isWaitingForResponse) {
-          // Final message, use all remaining data
           chunk = Buffer.concat(this.audioQueue);
           this.audioQueue = [];
         } else {
-          // Not enough data and still waiting for more
           this.isPlaying = false;
           setTimeout(() => this.processAudioQueue(), 50);
           return;
@@ -247,8 +238,7 @@ export class AudioHandler {
         if (chunk.length === 0) {
           this.isPlaying = false;
           if (!this.chat.isWaitingForResponse) {
-            // Wait for the speaker to finish naturally
-            this.speaker.on('finish', () => {
+            this.speaker.once('finish', () => {
               this.cleanupSpeaker(() => {
                 if (this.continuousMode && !this.recording && !this.isPlaying && !this.speaker) {
                   console.log('\nRestarting recording in continuous mode...');
@@ -256,8 +246,6 @@ export class AudioHandler {
                 }
               });
             });
-            
-            // End the stream to trigger 'finish' event
             this.speaker.end();
           }
           return;
@@ -281,7 +269,6 @@ export class AudioHandler {
 
                 if (!this.isPlaying || this.isCleaningUp) return;
 
-                // Reset pre-buffering state when response is complete
                 if (!this.chat.isWaitingForResponse) {
                   this.preBuffering = true;
                 }
@@ -291,20 +278,14 @@ export class AudioHandler {
                 if (this.audioQueue.length > 0 && !this.isCleaningUp) {
                   setTimeout(() => this.processAudioQueue(), 10);
                 } else if (!this.chat.isWaitingForResponse) {
-                  // Wait for the speaker to finish naturally
-                  this.speaker.on('finish', () => {
+                  this.speaker.once('finish', () => {
                     this.cleanupSpeaker(() => {
                       if (this.continuousMode && !this.recording && !this.isPlaying && !this.speaker) {
                         console.log('\nRestarting recording in continuous mode...');
                         this.startRecording();
-                      } else {
-                        // Re-enable wake word detection if not in continuous mode
-                        this.isListeningForWakeWord = !this.continuousMode;
                       }
                     });
                   });
-                  
-                  // End the stream to trigger 'finish' event
                   this.speaker.end();
                 }
               });
@@ -364,14 +345,12 @@ export class AudioHandler {
           if (!ignoredErrors.some(msg => err.message.includes(msg))) {
             console.error('Speaker error:', err);
           }
-          // Always cleanup on error to prevent hanging
           this.cleanupSpeaker();
         });
 
         this.speaker.on('close', () => {
           this.speakerInitialized = false;
           this.isPlaying = false;
-          // Reset the speaker instance
           this.speaker = null;
         });
 
@@ -409,7 +388,6 @@ export class AudioHandler {
       return;
     }
 
-    // Disable wake word detection while recording
     this.isListeningForWakeWord = false;
     this.speechDetected = false;
     this.pendingStopRecording = false;
@@ -431,7 +409,6 @@ export class AudioHandler {
       this.recording.stream().on('data', (chunk) => {
         if (this.chat.ws && this.chat.ws.readyState === 1) {
           this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
-          // Send after ~1 chunk
           if (this.audioBuffer.length >= audioSettings.sampleRate) {
             this.chat.ws.send(JSON.stringify({
               type: 'input_audio_buffer.append',
@@ -469,7 +446,6 @@ export class AudioHandler {
       this.recording = null;
     }
 
-    // Re-enable wake word detection unless in continuous mode
     if (!this.continuousMode) {
       this.isListeningForWakeWord = true;
     }
@@ -482,14 +458,12 @@ export class AudioHandler {
     this.continuousMode = !this.continuousMode;
     if (this.continuousMode) {
       console.log('\nContinuous conversation mode enabled');
-      // Disable wake word detection in continuous mode
       this.isListeningForWakeWord = false;
       if (!this.recording && !this.isPlaying) {
         this.startRecording();
       }
     } else {
       console.log('\nContinuous conversation mode disabled');
-      // Re-enable wake word detection when exiting continuous mode
       this.isListeningForWakeWord = true;
       if (this.recording) {
         this.stopRecording();
@@ -501,24 +475,19 @@ export class AudioHandler {
    * Immediately interrupt: discard audio, end speaker, cancel assistant
    */
   interruptPlayback() {
-    // If audio is playing or the assistant is responding
     if (this.isPlaying || this.chat.isWaitingForResponse) {
       console.log('\nInterrupting assistant...');
 
-      // Clear queued audio
       this.audioQueue = [];
 
-      // Immediately force speaker to stop playback if it exists
       if (this.speaker && !this.isCleaningUp) {
         try {
           this.speaker.end(); 
-          // This forcibly ends mpg123 so you don't hear leftover speech
         } catch (err) {
           console.error('Error forcing speaker to end:', err.message);
         }
       }
 
-      // Cancel the current response
       this.chat.isWaitingForResponse = false;
       this.chat.responseId = null;
       this.chat.currentFunctionArgs = '';
@@ -531,12 +500,10 @@ export class AudioHandler {
         }
       }
 
-      // If we are currently recording, stop it
       if (this.recording) {
         this.stopRecording();
       }
 
-      // Cleanup the speaker, then start new recording immediately
       this.cleanupSpeaker(() => {
         console.log('Immediately starting recording after interrupt...');
         this.startRecording();
@@ -581,7 +548,6 @@ export class AudioHandler {
   cleanup() {
     this.isCleaningUp = true;
 
-    // Stop wake word detection
     if (this.wakeWordProcess) {
       this.wakeWordProcess.kill();
       this.wakeWordProcess = null;
@@ -592,7 +558,6 @@ export class AudioHandler {
       this.recording = null;
     }
 
-    // Re-enable wake word detection when cleaning up
     this.isListeningForWakeWord = true;
     this.continuousMode = false;
     
@@ -606,7 +571,6 @@ export class AudioHandler {
    * @param {Buffer} key - Key press data
    */
   handleKeyPress(key) {
-    // 'r' - Toggle recording
     if (key[0] === 114) {
       if (this.recording) {
         this.stopRecording();
@@ -616,7 +580,6 @@ export class AudioHandler {
         console.log('\nWaiting for assistant to finish responding...');
       }
     }
-    // 'x' - Toggle continuous mode
     else if (key[0] === 120) {
       this.continuousMode = !this.continuousMode;
       if (this.continuousMode) {
@@ -629,11 +592,9 @@ export class AudioHandler {
         console.log('\nContinuous conversation mode disabled');
       }
     }
-    // 'i' - Interrupt
     else if (key[0] === 105) {
       this.interruptPlayback();
     }
-    // 'q' or Ctrl+C - Quit
     else if (key[0] === 113 || key[0] === 3) {
       this.cleanup();
       process.exit(0);

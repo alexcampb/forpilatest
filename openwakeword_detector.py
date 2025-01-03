@@ -82,7 +82,7 @@ try:
         
         # Clear line and update score (improved formatting)
         print(f"\rCurrent score: {current_score:.4f}", flush=True, end='')
-        if current_score > 0.5:
+        if current_score > 0.55:
             print(f"\nDETECTED! Score: {current_score:.4f}", flush=True)
         
         # If we detect something, save the audio for debugging

@@ -214,12 +214,12 @@ class ConsoleChat {
   }
 
   async initializeWebSocket(session) {
-    try {
-      if (this.ws) {
-        console.log('WebSocket already initialized');
-        return;
-      }
+    if (this.ws) {
+      console.log('WebSocket already initialized');
+      return;
+    }
 
+    try {
       // Connect to WebSocket
       this.ws = new WebSocket('wss://api.openai.com/v1/realtime', {
         headers: {
@@ -248,13 +248,42 @@ class ConsoleChat {
         console.error('\nWebSocket error:', error.message);
       });
 
-      this.ws.on('close', (code, reason) => {
-        console.log('\nConnection closed:', code, reason ? reason.toString() : '');
-        if (code !== 1000) {  // Normal closure
-          console.log('Attempting to reconnect...');
-          setTimeout(() => this.connect(), 1000);
-        }
+      this.ws.on('close', async (code, reason) => {
+        const reasonStr = reason ? reason.toString() : '';
+        console.log('\nConnection closed:', code, reasonStr);
+        
+        // Clear existing WebSocket
         this.ws = null;
+        
+        // Handle session timeout specifically
+        if (code === 1001 && reasonStr.includes('maximum duration')) {
+          console.log('Session timed out, creating new session...');
+          try {
+            // Create completely new session
+            const newSession = await this.createSession();
+            await this.initializeWebSocket(newSession);
+          } catch (err) {
+            console.error('Failed to create new session:', err);
+            process.exit(1);
+          }
+        } else if (code !== 1000) {  // Handle other non-normal closures
+          console.log('Connection lost, attempting to reconnect...');
+          try {
+            // Reuse existing session for other types of disconnects
+            await this.initializeWebSocket(session);
+          } catch (err) {
+            console.error('Failed to reconnect:', err);
+            // Try again in 1 second
+            setTimeout(async () => {
+              try {
+                await this.initializeWebSocket(session);
+              } catch (retryErr) {
+                console.error('Reconnection retry failed:', retryErr);
+                process.exit(1);
+              }
+            }, 1000);
+          }
+        }
       });
 
       // Route keyboard input to the audio handler
@@ -326,14 +355,14 @@ class ConsoleChat {
                   },
                   home_requests: {
                     type: "array",
-                    description: "List of home control requests. If empty, no home control requested.",
+                    description: "List of home control requests. If empty, no home control requested. ",
                     items: {
                       type: "object",
                       properties: {
                         room: {
                           type: "string",
                           enum: ["Living Room", "Family Room"],
-                          description: "The room to control "
+                          description: "The room to control If no room parameter passed default to the room you are in "
                         },
                         action: {
                           type: "string",
