@@ -10,10 +10,16 @@ export class PushoverAPI {
   constructor() {
     this.apiToken = process.env.PUSHOVER_APP_TOKEN;
     this.userKey = process.env.PUSHOVER_USER_KEY;
+    this.lastMessageTime = 0;  // Track when the last message was sent
     
     if (!this.apiToken || !this.userKey) {
       console.warn('Warning: Pushover credentials not found in environment variables');
     }
+  }
+
+  // Helper function to create a delay
+  async delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
@@ -30,6 +36,15 @@ export class PushoverAPI {
       throw new Error('Pushover credentials not configured');
     }
 
+    // Calculate time since last message
+    const now = Date.now();
+    const timeSinceLastMessage = now - this.lastMessageTime;
+    
+    // If less than 10 seconds have passed, wait for the remaining time
+    if (timeSinceLastMessage < 800) {
+      await this.delay(800 - timeSinceLastMessage);
+    }
+
     const payload = {
       token: this.apiToken,
       user: this.userKey,
@@ -42,10 +57,13 @@ export class PushoverAPI {
     const response = await fetch('https://api.pushover.net/1/messages.json', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     });
+
+    // Update last message time after successful send
+    this.lastMessageTime = Date.now();
 
     const data = await response.json();
     if (!response.ok) {

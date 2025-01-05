@@ -14,6 +14,11 @@ export class FunctionHandler {
     this.chat = chat;
   }
 
+  // Helper function to create a delay
+  async delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   /**
    * Handles function calls from the assistant
    * @param {string} functionName - Name of the function to call
@@ -238,7 +243,7 @@ export class FunctionHandler {
         success: true,
         mode: enabled ? 'enabled' : 'disabled',
         message: enabled 
-          ? "I've enabled continuous mode. This means I'll automatically start listening after each response. You can just speak naturally  each time. To exit continuous mode, just say 'disable continuous mode' or press X."
+          ? "Continuous mode is now enabled. This means I'll automatically start listening after each response."
           : "Continuous mode has been disabled."
       };
 

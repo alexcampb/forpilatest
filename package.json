@@ -22,9 +22,10 @@
     "dayjs": "^1.11.13",
     "dotenv": "^16.3.1",
     "express": "^4.21.2",
+    "form-data": "^4.0.1",
     "google-auth-library": "^9.15.0",
     "googleapis": "^144.0.0",
-    "node-fetch": "^3.3.2",
+    "node-fetch": "^2.7.0",
     "node-record-lpcm16": "^1.0.1",
     "speaker": "^0.5.4",
     "ws": "^8.16.0"
