@@ -45,6 +45,25 @@ for i in range(p.get_device_count()):
     dev = p.get_device_info_by_index(i)
     print(f"{i}: {dev['name']} (in: {dev['maxInputChannels']}, out: {dev['maxOutputChannels']})")
 
+# Set default input device (use PipeWire on Linux)
+if os.name == 'posix' and os.uname().sysname == 'Linux':
+    # Try to find PipeWire device
+    pipewire_device = None
+    for i in range(p.get_device_count()):
+        dev = p.get_device_info_by_index(i)
+        if 'pipewire' in dev['name'].lower():
+            pipewire_device = i
+            break
+    
+    if pipewire_device is not None:
+        print(f"Using PipeWire device: {p.get_device_info_by_index(pipewire_device)['name']}")
+        default_device = pipewire_device
+    else:
+        print("PipeWire device not found, using system default")
+        default_device = p.get_default_input_device_info()['index']
+else:
+    default_device = p.get_default_input_device_info()['index']
+
 # Keep a buffer of recent audio for debugging
 audio_buffer = []
 BUFFER_CHUNKS = 20  # Keep about 1.6 seconds of audio
@@ -57,6 +76,7 @@ try:
         channels=CHANNELS,
         rate=RATE,
         input=True,
+        input_device_index=default_device,
         frames_per_buffer=CHUNK
     )
 

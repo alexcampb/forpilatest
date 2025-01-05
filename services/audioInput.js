@@ -8,7 +8,7 @@ export const audioSettings = {
   sampleRate: 16000,  // OpenAI expects 16kHz
   channels: 1,
   bitDepth: 16,
-  device: os.platform() === 'linux' ? 'pulse' : 'default',
+  device: os.platform() === 'linux' ? 'pipewire' : 'default',
   encoding: os.platform() === 'linux' ? 'signed-integer' : undefined,
   format: 'raw'
 };
@@ -165,8 +165,8 @@ export class AudioInput {
     } catch (err) {
       console.error('Error starting recording:', err.message);
       if (os.platform() === 'linux') {
-        console.error('On Linux, make sure you have ALSA and PulseAudio installed:');
-        console.error('sudo apt-get install libasound2-dev pulseaudio');
+        console.error('On Linux, make sure you have ALSA and PipeWire installed:');
+        console.error('sudo apt-get install pipewire pipewire-pulse');
       }
       if (this.recording) {
         this.recording.stop();
