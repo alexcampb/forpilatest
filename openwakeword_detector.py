@@ -43,28 +43,126 @@ os.makedirs("debug_audio", exist_ok=True)
 
 # Initialize wake word detection
 logger.info("Initializing wake word detection...")
-download_models(["hey_jarvis"])
+try:
+    logger.info("Step 1: Downloading models...")
+    download_models(["hey_jarvis"])
+    logger.info("Models downloaded successfully")
 
-# Choose inference framework based on platform
-if platform.system() == 'Linux' and platform.machine() in ['aarch64', 'armv7l']:
-    inference_framework = "tflite"  # Use TFLite on ARM-based Linux (Raspberry Pi)
-    logger.info("Using TensorFlow Lite for ARM processor")
-else:
-    inference_framework = "onnx"    # Use ONNX on other platforms (like macOS)
-    logger.info("Using ONNX inference framework")
+    # Choose inference framework based on platform and availability
+    inference_framework = "onnx"  # Default to ONNX
+    try:
+        if platform.system() == 'Linux' and platform.machine() in ['aarch64', 'armv7l']:
+            import tflite_runtime
+            inference_framework = "tflite"
+            logger.info("Using TensorFlow Lite for ARM processor")
+    except ImportError as e:
+        logger.info(f"TensorFlow Lite not available ({str(e)}), using ONNX framework")
 
-model = openwakeword.Model(
-    wakeword_models=["hey_jarvis"],
-    inference_framework=inference_framework
-)
+    logger.info(f"Step 2: Creating model with framework: {inference_framework}")
+    model = openwakeword.Model(
+        wakeword_models=["hey_jarvis"],
+        inference_framework=inference_framework
+    )
+    logger.info("Model created successfully")
 
-# Audio settings
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000  # Default rate
-CHUNK = 4096  # Increased buffer size for higher sample rates
-DETECTION_THRESHOLD = 0.65  # Increased detection threshold
-COOLDOWN_CHUNKS = 15  # Number of chunks to wait before allowing another detection
+    # Find audio input device
+    logger.info("Step 3: Finding audio input device...")
+    device_index, device_info = find_input_device()
+    if device_index is None:
+        raise RuntimeError("No audio input device found")
+    logger.info(f"Found audio device: {device_info['name'] if device_info else 'Unknown'}")
+
+    # Initialize audio
+    logger.info("Step 4: Initializing audio...")
+    p = pyaudio.PyAudio()
+    try:
+        # Get supported sample rate
+        sample_rate = get_supported_sample_rate(p, device_index)
+        if sample_rate is None:
+            raise RuntimeError("Could not find a supported sample rate for the device")
+        
+        logger.info(f"Opening audio stream with sample rate: {sample_rate} Hz")
+        stream = p.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=sample_rate,
+            input=True,
+            input_device_index=device_index,
+            frames_per_buffer=4096
+        )
+        logger.info("Audio stream opened successfully")
+
+        logger.info("\nReady! Say 'Hey Jarvis' to test wake word detection")
+        logger.info("(Audio samples will be saved to the debug_audio folder)")
+
+        # Main detection loop
+        logger.info("Starting main detection loop...")
+        audio_buffer = []
+        collecting = False
+        cooldown_counter = 0
+        while True:
+            try:
+                # Read audio data
+                data = stream.read(4096, exception_on_overflow=False)
+                audio_block = np.frombuffer(data, dtype=np.int16)
+                
+                # Resample to 16000 Hz if needed (model expects this rate)
+                if sample_rate != 16000:
+                    audio_block = resample_audio(audio_block, sample_rate, 16000)
+                
+                # Get prediction
+                prediction = model.predict(audio_block)
+                current_score = prediction['hey_jarvis']
+                
+                # Print score without newline
+                print(f"\rCurrent score: {current_score:.4f}", end='', flush=True)
+                
+                # Print detection message when score is high enough and not in cooldown
+                if current_score > 0.65 and not collecting:
+                    print(f"\nDETECTED! Score: {current_score:.4f}")
+                    cooldown_counter = 15  # Start cooldown
+                
+                # Start collecting audio if score is high
+                if current_score > 0.4:
+                    if not collecting:  # Only start collecting if we weren't already
+                        collecting = True
+                        audio_buffer = [audio_block]  # Start with current block
+                elif collecting:
+                    audio_buffer.append(audio_block)
+                    
+                    # Save if we've collected enough or score drops
+                    if len(audio_buffer) > 10 or current_score < 0.2:
+                        collecting = False
+                        if len(audio_buffer) > 2:  # Only save if we have enough audio
+                            timestamp = datetime.now().strftime("%H-%M-%S")
+                            buffer_audio = np.concatenate(audio_buffer)
+                            filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
+                            sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)  # Always save at 16000 Hz
+                
+                # Update cooldown
+                if cooldown_counter > 0:
+                    cooldown_counter -= 1
+
+            except KeyboardInterrupt:
+                logger.info("\nStopping...")
+                break
+            except Exception as e:
+                logger.error(f"Error in detection loop: {str(e)}")
+                continue
+
+    except Exception as e:
+        logger.error(f"Error setting up audio: {str(e)}")
+        if 'stream' in locals():
+            stream.stop_stream()
+            stream.close()
+        p.terminate()
+        sys.exit(1)
+
+except Exception as e:
+    logger.error(f"Error during initialization: {str(e)}")
+    import traceback
+    logger.error(traceback.format_exc())
+    sys.exit(1)
 
 def get_supported_sample_rate(p, device_index, preferred_rate=16000):
     """Get a supported sample rate for the device"""
@@ -73,8 +171,8 @@ def get_supported_sample_rate(p, device_index, preferred_rate=16000):
         p.is_format_supported(
             preferred_rate,
             input_device=device_index,
-            input_channels=CHANNELS,
-            input_format=FORMAT
+            input_channels=1,
+            input_format=pyaudio.paInt16
         )
         return preferred_rate
     except:
@@ -85,8 +183,8 @@ def get_supported_sample_rate(p, device_index, preferred_rate=16000):
                 p.is_format_supported(
                     rate,
                     input_device=device_index,
-                    input_channels=CHANNELS,
-                    input_format=FORMAT
+                    input_channels=1,
+                    input_format=pyaudio.paInt16
                 )
                 logger.info(f"Using alternative sample rate: {rate} Hz")
                 return rate
@@ -143,107 +241,3 @@ def resample_audio(audio_data, from_rate, to_rate):
         np.arange(len(audio_data)),
         audio_data
     )
-
-# Find audio input device
-device_index, device_info = find_input_device()
-if device_index is None:
-    logger.error("\nNo audio input device found")
-    if platform.system() == 'Linux':
-        logger.error("Please connect a microphone (USB microphone or audio HAT)")
-        logger.error("Recommended options:")
-        logger.error("1. USB microphone")
-        logger.error("2. ReSpeaker HAT")
-        logger.error("3. USB sound card with microphone input")
-    else:
-        logger.error("Please connect a microphone to your device")
-    sys.exit(1)
-
-# Initialize audio
-p = pyaudio.PyAudio()
-try:
-    logger.info("\nStarting audio capture...")
-    if device_info:
-        logger.info(f"Using audio device: {device_info['name']}")
-    
-    # Get supported sample rate
-    sample_rate = get_supported_sample_rate(p, device_index)
-    if sample_rate is None:
-        logger.error("Could not find a supported sample rate for the device")
-        sys.exit(1)
-    
-    stream = p.open(
-        format=FORMAT,
-        channels=CHANNELS,
-        rate=sample_rate,
-        input=True,
-        input_device_index=device_index,
-        frames_per_buffer=CHUNK
-    )
-
-    logger.info("Ready! Say 'Hey Jarvis' to test wake word detection")
-    logger.info("(Audio samples will be saved to the debug_audio folder)")
-    print("#" * 50)
-    logger.info("Listening for wake word 'Hey Jarvis'...")
-    print("#" * 50)
-    
-    logger.info("Note: When speaking, try to:")
-    logger.info("1. Speak clearly and at a normal volume")
-    logger.info("2. Be in a quiet environment")
-    logger.info("3. Say 'Hey Jarvis' naturally")
-    logger.info("Any detected audio will be saved to the 'debug_audio' folder")
-
-    audio_buffer = []
-    collecting = False
-    cooldown_counter = 0
-    while True:
-        try:
-            # Read audio data
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            audio_block = np.frombuffer(data, dtype=np.int16)
-            
-            # Resample to 16000 Hz if needed (model expects this rate)
-            if sample_rate != 16000:
-                audio_block = resample_audio(audio_block, sample_rate, 16000)
-            
-            # Get prediction
-            prediction = model.predict(audio_block)
-            current_score = prediction['hey_jarvis']
-            
-            # Print score without newline
-            print(f"\rCurrent score: {current_score:.4f}", end='', flush=True)
-            
-            # Print detection message when score is high enough and not in cooldown
-            if current_score > DETECTION_THRESHOLD and not collecting:
-                print(f"\nDETECTED! Score: {current_score:.4f}")
-                cooldown_counter = COOLDOWN_CHUNKS  # Start cooldown
-            
-            # Start collecting audio if score is high
-            if current_score > 0.4:
-                if not collecting:  # Only start collecting if we weren't already
-                    collecting = True
-                    audio_buffer = [audio_block]  # Start with current block
-            elif collecting:
-                audio_buffer.append(audio_block)
-                
-                # Save if we've collected enough or score drops
-                if len(audio_buffer) > 10 or current_score < 0.2:
-                    collecting = False
-                    if len(audio_buffer) > 2:  # Only save if we have enough audio
-                        timestamp = datetime.now().strftime("%H-%M-%S")
-                        buffer_audio = np.concatenate(audio_buffer)
-                        filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
-                        sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)  # Always save at 16000 Hz
-            
-            # Update cooldown
-            if cooldown_counter > 0:
-                cooldown_counter -= 1
-        except Exception as e:
-            print(f"Error: {e}")
-except KeyboardInterrupt:
-    print("Stopping...")
-finally:
-    # Clean up
-    if 'stream' in locals():
-        stream.stop_stream()
-        stream.close()
-    p.terminate()
