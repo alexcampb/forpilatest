@@ -11,7 +11,26 @@ import soundfile as sf
 from openwakeword.utils import download_models
 import logging
 import os
+import sys
 from datetime import datetime
+import warnings
+import ctypes
+import ctypes.util
+
+# Suppress ALSA errors by redirecting stderr
+try:
+    # Load the ALSA error handler
+    asound = ctypes.CDLL(ctypes.util.find_library('asound'))
+    # Set error handler
+    error_handler = ctypes.c_void_p()
+    asound.snd_lib_error_set_handler(error_handler)
+except:
+    # If loading ALSA library fails, use basic stderr redirection
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stderr = os.dup(2)
+    sys.stderr.flush()
+    os.dup2(devnull, 2)
+    os.close(devnull)
 
 # Enable logging
 logging.basicConfig(level=logging.INFO)
@@ -36,27 +55,62 @@ CHANNELS = 1
 RATE = 16000  # Required by OpenWakeWord
 CHUNK = 1280  # Optimal for OpenWakeWord
 
+def check_audio_input():
+    """Check if any audio input devices are available"""
+    p = pyaudio.PyAudio()
+    input_devices = []
+    
+    try:
+        for i in range(p.get_device_count()):
+            dev_info = p.get_device_info_by_index(i)
+            if dev_info.get('maxInputChannels') > 0:
+                input_devices.append(dev_info)
+    finally:
+        p.terminate()
+    
+    return input_devices
+
+# Check for audio input devices
+input_devices = check_audio_input()
+if not input_devices:
+    print("\nError: No audio input devices found!")
+    print("Please check that:")
+    print("1. A microphone is properly connected to your device")
+    print("2. The microphone is recognized by your system (try 'arecord -l')")
+    print("3. You have the necessary permissions to access audio devices")
+    sys.exit(1)
+
 # Initialize PyAudio
 p = pyaudio.PyAudio()
 
-# List available audio devices
-print("Available audio devices:")
-for i in range(p.get_device_count()):
-    dev = p.get_device_info_by_index(i)
-    print(f"{i}: {dev['name']} (in: {dev['maxInputChannels']}, out: {dev['maxOutputChannels']})")
+# List and select audio device
+print("\nAvailable audio input devices:")
+selected_device_index = None
 
-# Keep a buffer of recent audio for debugging
-audio_buffer = []
-BUFFER_CHUNKS = 20  # Keep about 1.6 seconds of audio
+for device in input_devices:
+    print(f"Input Device id {device['index']} - {device['name']}")
+    # Prefer PipeWire, then Pulse, then default
+    if 'pipewire' in device['name'].lower():
+        selected_device_index = device['index']
+        print(f"Selected PipeWire device: {device['name']}")
+        break
+    elif 'pulse' in device['name'].lower() and selected_device_index is None:
+        selected_device_index = device['index']
+        print(f"Selected Pulse device: {device['name']}")
+
+if selected_device_index is None and input_devices:
+    selected_device_index = input_devices[0]['index']
+    print(f"Using first available device: {input_devices[0]['name']}")
 
 try:
     # Start audio stream
-    print("Starting audio stream...")
+    print("\nStarting audio stream...")
     stream = p.open(
         format=FORMAT,
         channels=CHANNELS,
         rate=RATE,
         input=True,
+        input_device_index=selected_device_index,
         frames_per_buffer=CHUNK
     )
 
@@ -68,6 +122,10 @@ try:
     print("2. Be in a quiet environment")
     print("3. Say 'Hey Jarvis' naturally")
     print("Any detected audio will be saved to the 'debug_audio' folder")
+
+    # Keep a buffer of recent audio for debugging
+    audio_buffer = []
+    BUFFER_CHUNKS = 20  # Keep about 1.6 seconds of audio
 
     while True:
         # Get audio
