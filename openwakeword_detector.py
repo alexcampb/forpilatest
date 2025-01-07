@@ -41,6 +41,84 @@ logger = logging.getLogger(__name__)
 # Create directory for audio samples
 os.makedirs("debug_audio", exist_ok=True)
 
+def get_supported_sample_rate(p, device_index, preferred_rate=16000):
+    """Get a supported sample rate for the device"""
+    try:
+        # Try the preferred rate first
+        p.is_format_supported(
+            preferred_rate,
+            input_device=device_index,
+            input_channels=1,
+            input_format=pyaudio.paInt16
+        )
+        return preferred_rate
+    except:
+        # If preferred rate fails, try common rates
+        common_rates = [44100, 48000, 32000, 22050, 16000, 8000]
+        for rate in common_rates:
+            try:
+                p.is_format_supported(
+                    rate,
+                    input_device=device_index,
+                    input_channels=1,
+                    input_format=pyaudio.paInt16
+                )
+                logger.info(f"Using alternative sample rate: {rate} Hz")
+                return rate
+            except:
+                continue
+    return None
+
+def find_input_device():
+    """Find available audio input device"""
+    p = pyaudio.PyAudio()
+    try:
+        # First try to find P10S USB device
+        for i in range(p.get_device_count()):
+            dev_info = p.get_device_info_by_index(i)
+            if dev_info.get('maxInputChannels') > 0:
+                name = dev_info.get('name', '').lower()
+                if 'monitor' not in name:  # Skip monitor devices
+                    if 'p10s' in name:  # Look for P10S device
+                        logger.info(f"Found P10S USB audio device: {dev_info['name']}")
+                        return dev_info['index'], dev_info
+        
+        # Then try to find PipeWire on Linux
+        if platform.system() == 'Linux':
+            for i in range(p.get_device_count()):
+                dev_info = p.get_device_info_by_index(i)
+                if dev_info.get('maxInputChannels') > 0:
+                    name = dev_info.get('name', '').lower()
+                    if 'monitor' not in name:
+                        if 'pipewire' in name:
+                            logger.info(f"Found PipeWire device: {dev_info['name']}")
+                            return dev_info['index'], dev_info
+        
+        # Finally fall back to default input device
+        info = p.get_default_input_device_info()
+        if info and info.get('maxInputChannels') > 0 and 'monitor' not in info.get('name', '').lower():
+            logger.info(f"Using default input device: {info['name']}")
+            return info['index'], info
+        
+        logger.error("No suitable audio input device found")
+    except Exception as e:
+        logger.error(f"Error finding audio input device: {str(e)}")
+    finally:
+        p.terminate()
+    return None, None
+
+def resample_audio(audio_data, from_rate, to_rate):
+    """Resample audio data to target rate"""
+    if from_rate == to_rate:
+        return audio_data
+    duration = len(audio_data) / from_rate
+    target_length = int(duration * to_rate)
+    return np.interp(
+        np.linspace(0, len(audio_data), target_length, endpoint=False),
+        np.arange(len(audio_data)),
+        audio_data
+    )
+
 # Initialize wake word detection
 logger.info("Initializing wake word detection...")
 try:
@@ -163,81 +241,3 @@ except Exception as e:
     import traceback
     logger.error(traceback.format_exc())
     sys.exit(1)
-
-def get_supported_sample_rate(p, device_index, preferred_rate=16000):
-    """Get a supported sample rate for the device"""
-    try:
-        # Try the preferred rate first
-        p.is_format_supported(
-            preferred_rate,
-            input_device=device_index,
-            input_channels=1,
-            input_format=pyaudio.paInt16
-        )
-        return preferred_rate
-    except:
-        # If preferred rate fails, try common rates
-        common_rates = [44100, 48000, 32000, 22050, 16000, 8000]
-        for rate in common_rates:
-            try:
-                p.is_format_supported(
-                    rate,
-                    input_device=device_index,
-                    input_channels=1,
-                    input_format=pyaudio.paInt16
-                )
-                logger.info(f"Using alternative sample rate: {rate} Hz")
-                return rate
-            except:
-                continue
-    return None
-
-def find_input_device():
-    """Find available audio input device"""
-    p = pyaudio.PyAudio()
-    try:
-        # First try to find P10S USB device
-        for i in range(p.get_device_count()):
-            dev_info = p.get_device_info_by_index(i)
-            if dev_info.get('maxInputChannels') > 0:
-                name = dev_info.get('name', '').lower()
-                if 'monitor' not in name:  # Skip monitor devices
-                    if 'p10s' in name:  # Look for P10S device
-                        logger.info(f"Found P10S USB audio device: {dev_info['name']}")
-                        return dev_info['index'], dev_info
-        
-        # Then try to find PipeWire on Linux
-        if platform.system() == 'Linux':
-            for i in range(p.get_device_count()):
-                dev_info = p.get_device_info_by_index(i)
-                if dev_info.get('maxInputChannels') > 0:
-                    name = dev_info.get('name', '').lower()
-                    if 'monitor' not in name:
-                        if 'pipewire' in name:
-                            logger.info(f"Found PipeWire device: {dev_info['name']}")
-                            return dev_info['index'], dev_info
-        
-        # Finally fall back to default input device
-        info = p.get_default_input_device_info()
-        if info and info.get('maxInputChannels') > 0 and 'monitor' not in info.get('name', '').lower():
-            logger.info(f"Using default input device: {info['name']}")
-            return info['index'], info
-        
-        logger.error("No suitable audio input device found")
-    except Exception as e:
-        logger.error(f"Error finding audio input device: {str(e)}")
-    finally:
-        p.terminate()
-    return None, None
-
-def resample_audio(audio_data, from_rate, to_rate):
-    """Resample audio data to target rate"""
-    if from_rate == to_rate:
-        return audio_data
-    duration = len(audio_data) / from_rate
-    target_length = int(duration * to_rate)
-    return np.interp(
-        np.linspace(0, len(audio_data), target_length, endpoint=False),
-        np.arange(len(audio_data)),
-        audio_data
-    )
