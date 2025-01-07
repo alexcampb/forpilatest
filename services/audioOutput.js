@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 import os from 'os';
-const Speaker = os.arch() === 'arm64' ? require('speaker-arm64') : require('speaker');
+import Speaker from 'speaker';
 
 /**
  * Handles audio output functionality including speaker management and playback

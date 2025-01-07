@@ -63,26 +63,32 @@ def find_input_device():
         if platform.system() == 'Linux':
             for i in range(p.get_device_count()):
                 dev_info = p.get_device_info_by_index(i)
-                if dev_info.get('maxInputChannels') > 0 and 'pipewire' in dev_info.get('name', '').lower():
-                    return dev_info['index'], dev_info
+                if dev_info.get('maxInputChannels') > 0:
+                    name = dev_info.get('name', '').lower()
+                    if 'monitor' not in name:  # Skip monitor devices as they're not real inputs
+                        if 'pipewire' in name:
+                            return dev_info['index'], dev_info
         
         # Otherwise get default input device
         info = p.get_default_input_device_info()
-        return info['index'], info
+        if info and info.get('maxInputChannels') > 0 and 'monitor' not in info.get('name', '').lower():
+            return info['index'], info
     except:
-        return None, None
+        pass
     finally:
         p.terminate()
+    return None, None
 
 # Find audio input device
 device_index, device_info = find_input_device()
 if device_index is None:
     logger.error("\nNo audio input device found")
     if platform.system() == 'Linux':
-        logger.error("Please connect a microphone and ensure PipeWire is running:")
-        logger.error("1. Connect a USB microphone or audio HAT")
-        logger.error("2. Run: sudo apt install pipewire")
-        logger.error("3. Run: systemctl --user start pipewire")
+        logger.error("Please connect a microphone (USB microphone or audio HAT)")
+        logger.error("Recommended options:")
+        logger.error("1. USB microphone")
+        logger.error("2. ReSpeaker HAT")
+        logger.error("3. USB sound card with microphone input")
     else:
         logger.error("Please connect a microphone to your device")
     sys.exit(1)
@@ -91,7 +97,8 @@ if device_index is None:
 p = pyaudio.PyAudio()
 try:
     logger.info("\nStarting audio capture...")
-    logger.info(f"Using audio device: {device_info['name']}")
+    if device_info:
+        logger.info(f"Using audio device: {device_info['name']}")
     stream = p.open(
         format=FORMAT,
         channels=CHANNELS,
