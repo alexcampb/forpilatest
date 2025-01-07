@@ -200,6 +200,10 @@ try:
             # Print score without newline
             print(f"\rCurrent score: {current_score:.4f}", end='', flush=True)
             
+            # Print detection message when score is high enough
+            if current_score > 0.5:
+                print(f"\nDETECTED! Score: {current_score:.4f}")
+            
             # Start collecting audio if score is high
             if current_score > 0.4:
                 collecting = True
