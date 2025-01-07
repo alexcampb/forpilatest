@@ -59,22 +59,36 @@ def find_input_device():
     """Find available audio input device"""
     p = pyaudio.PyAudio()
     try:
-        # Try to find PipeWire first on Linux
+        # First try to find P10S USB device
+        for i in range(p.get_device_count()):
+            dev_info = p.get_device_info_by_index(i)
+            if dev_info.get('maxInputChannels') > 0:
+                name = dev_info.get('name', '').lower()
+                if 'monitor' not in name:  # Skip monitor devices
+                    if 'p10s' in name:  # Look for P10S device
+                        logger.info(f"Found P10S USB audio device: {dev_info['name']}")
+                        return dev_info['index'], dev_info
+        
+        # Then try to find PipeWire on Linux
         if platform.system() == 'Linux':
             for i in range(p.get_device_count()):
                 dev_info = p.get_device_info_by_index(i)
                 if dev_info.get('maxInputChannels') > 0:
                     name = dev_info.get('name', '').lower()
-                    if 'monitor' not in name:  # Skip monitor devices as they're not real inputs
+                    if 'monitor' not in name:
                         if 'pipewire' in name:
+                            logger.info(f"Found PipeWire device: {dev_info['name']}")
                             return dev_info['index'], dev_info
         
-        # Otherwise get default input device
+        # Finally fall back to default input device
         info = p.get_default_input_device_info()
         if info and info.get('maxInputChannels') > 0 and 'monitor' not in info.get('name', '').lower():
+            logger.info(f"Using default input device: {info['name']}")
             return info['index'], info
-    except:
-        pass
+        
+        logger.error("No suitable audio input device found")
+    except Exception as e:
+        logger.error(f"Error finding audio input device: {str(e)}")
     finally:
         p.terminate()
     return None, None
