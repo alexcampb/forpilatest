@@ -165,8 +165,8 @@ export class AudioInput {
     } catch (err) {
       console.error('Error starting recording:', err.message);
       if (os.platform() === 'linux') {
-        console.error('On Linux, make sure you have ALSA and PipeWire installed:');
-        console.error('sudo apt-get install pipewire pipewire-pulse');
+        console.error('On Linux, make sure you have ALSA and PulseAudio installed:');
+        console.error('sudo apt-get install libasound2-dev pulseaudio');
       }
       if (this.recording) {
         this.recording.stop();

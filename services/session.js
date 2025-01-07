@@ -6,6 +6,7 @@ import fetch from 'node-fetch';
  * Includes extensive examples illustrating how the assistant should respond
  * and which function to call based on user requests.
  */
+
 export class SessionManager {
   constructor() {
     if (!process.env.OPENAI_API_KEY) {
@@ -70,6 +71,7 @@ export class SessionManager {
    *            ]
    *          })
    */
+
   async createSession() {
     try {
       const response = await fetch("https://api.openai.com/v1/realtime/sessions", {

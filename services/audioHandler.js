@@ -4,6 +4,7 @@ import { AudioOutput } from './audioOutput.js';
 /**
  * Coordinates audio input and output functionality
  */
+
 export class AudioHandler {
   constructor(chat) {
     this.chat = chat;
