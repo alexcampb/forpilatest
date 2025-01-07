@@ -16,112 +16,101 @@ from datetime import datetime
 import warnings
 import ctypes
 import ctypes.util
+import platform
 
-# Suppress ALSA errors
-try:
-    # Find the ALSA library
-    asound = ctypes.CDLL(ctypes.util.find_library('asound'))
-    # Set error handler to ignore errors
-    error_handler = ctypes.c_void_p()
-    asound.snd_lib_error_set_handler(error_handler)
-except:
-    # If we can't load ALSA, redirect stderr
+# Completely suppress ALSA errors
+os.environ['PYTHONWARNINGS'] = 'ignore::RuntimeWarning'
+if platform.system() == 'Linux':
+    # Redirect all error output to devnull
     devnull = os.open(os.devnull, os.O_WRONLY)
-    old_stderr = os.dup(2)
-    sys.stderr.flush()
     os.dup2(devnull, 2)
     os.close(devnull)
+    
+    # Prevent JACK from starting
+    os.environ['JACK_NO_START_SERVER'] = '1'
+    os.environ['JACK_NO_AUDIO_RESERVATION'] = '1'
 
-# Enable logging
-logging.basicConfig(level=logging.INFO)
+# Configure minimal logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
 
 # Create directory for audio samples
 os.makedirs("debug_audio", exist_ok=True)
 
-# Download required models first
-print("Downloading models...")
+# Initialize wake word detection
+logger.info("Initializing wake word detection...")
 download_models(["hey_jarvis"])
-
-# Initialize wake word model with explicit ONNX model
-print("Initializing model...")
 model = openwakeword.Model(
     wakeword_models=["hey_jarvis"],
     inference_framework="onnx"
 )
 
-# Set up audio parameters
+# Audio parameters
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 16000  # Required by OpenWakeWord
-CHUNK = 1280  # Optimal for OpenWakeWord
+RATE = 16000
+CHUNK = 1280
 
-def check_audio_input():
-    """Check if any audio input devices are available"""
+def find_input_device():
+    """Find available audio input device"""
     p = pyaudio.PyAudio()
-    input_devices = []
-    
     try:
-        for i in range(p.get_device_count()):
-            dev_info = p.get_device_info_by_index(i)
-            if dev_info.get('maxInputChannels') > 0:
-                input_devices.append(dev_info)
+        # Try to find PipeWire first on Linux
+        if platform.system() == 'Linux':
+            for i in range(p.get_device_count()):
+                dev_info = p.get_device_info_by_index(i)
+                if dev_info.get('maxInputChannels') > 0 and 'pipewire' in dev_info.get('name', '').lower():
+                    return dev_info['index'], dev_info
+        
+        # Otherwise get default input device
+        info = p.get_default_input_device_info()
+        return info['index'], info
+    except:
+        return None, None
     finally:
         p.terminate()
-    
-    return input_devices
 
-# Check for audio input devices first
-input_devices = check_audio_input()
-if not input_devices:
-    print("\nError: No audio input devices found!")
-    print("Please check that:")
-    print("1. A microphone is properly connected to your device")
-    print("2. The microphone is recognized by your system (try 'arecord -l')")
-    print("3. You have the necessary permissions to access audio devices")
+# Find audio input device
+device_index, device_info = find_input_device()
+if device_index is None:
+    logger.error("\nNo audio input device found")
+    if platform.system() == 'Linux':
+        logger.error("Please connect a microphone and ensure PipeWire is running:")
+        logger.error("1. Connect a USB microphone or audio HAT")
+        logger.error("2. Run: sudo apt install pipewire")
+        logger.error("3. Run: systemctl --user start pipewire")
+    else:
+        logger.error("Please connect a microphone to your device")
     sys.exit(1)
 
-# Initialize PyAudio
+# Initialize audio
 p = pyaudio.PyAudio()
-
-# List and select audio device
-print("\nAvailable audio input devices:")
-selected_device_index = None
-
-for device in input_devices:
-    print(f"Input Device id {device['index']} - {device['name']}")
-    # Prefer PipeWire, then Pulse, then default
-    if 'pipewire' in device['name'].lower():
-        selected_device_index = device['index']
-        print(f"Selected PipeWire device: {device['name']}")
-        break
-    elif 'pulse' in device['name'].lower() and selected_device_index is None:
-        selected_device_index = device['index']
-        print(f"Selected Pulse device: {device['name']}")
-
-if selected_device_index is None and input_devices:
-    selected_device_index = input_devices[0]['index']
-    print(f"Using first available device: {input_devices[0]['name']}")
-
 try:
-    # Start audio stream
-    print("\nStarting audio stream...")
+    logger.info("\nStarting audio capture...")
     stream = p.open(
         format=FORMAT,
         channels=CHANNELS,
         rate=RATE,
         input=True,
-        input_device_index=selected_device_index,
+        input_device_index=device_index,
         frames_per_buffer=CHUNK
     )
 
-    print("#"*50)
-    print("Listening for wake word 'Hey Jarvis'...")
-    print("#"*50)
-    print("Note: When speaking, try to:")
-    print("1. Speak clearly and at a normal volume")
-    print("2. Be in a quiet environment")
-    print("3. Say 'Hey Jarvis' naturally")
-    print("Any detected audio will be saved to the 'debug_audio' folder")
+    logger.info("Ready! Say 'Hey Jarvis' to test wake word detection")
+    logger.info("(Audio samples will be saved to the debug_audio folder)")
+
+    logger.info("#" * 50)
+    logger.info("Listening for wake word 'Hey Jarvis'...")
+    logger.info("#" * 50)
+    logger.info("Note: When speaking, try to:")
+    logger.info("1. Speak clearly and at a normal volume")
+    logger.info("2. Be in a quiet environment")
+    logger.info("3. Say 'Hey Jarvis' naturally")
+    logger.info("Any detected audio will be saved to the 'debug_audio' folder")
 
     # Keep a buffer of recent audio for debugging
     audio_buffer = []
