@@ -22,22 +22,31 @@ Note: When speaking, try to:
 2. Be in a quiet environment
 3. Say 'Hey Jarvis' naturally
 Any detected audio will be saved to the 'debug_audio' folder
-Current score: 0.9976
-DETECTED! Score: 0.9976
-Current score: 0.9961
-DETECTED! Score: 0.9961
-Current score: 0.9944
-DETECTED! Score: 0.9944
-Current score: 0.9951
-DETECTED! Score: 0.9951
-Current score: 0.9908
-DETECTED! Score: 0.9908
-Current score: 0.9947
-DETECTED! Score: 0.9947
-Current score: 0.9936
-DETECTED! Score: 0.9936
+Current score: 0.6799
+DETECTED! Score: 0.6799
+Current score: 0.9195
+DETECTED! Score: 0.9195
+Current score: 0.8975
+DETECTED! Score: 0.8975
+Current score: 0.9411
+DETECTED! Score: 0.9411
+Current score: 0.9195
+DETECTED! Score: 0.9195
+Current score: 0.8380
+DETECTED! Score: 0.8380
+Current score: 0.6841
+DETECTED! Score: 0.6841
+Current score: 0.6404
+DETECTED! Score: 0.6404
+Current score: 0.5870
+DETECTED! Score: 0.5870
+Current score: 0.9549
+DETECTED! Score: 0.9549
+Current score: 0.9425
+DETECTED! Score: 0.9425
 Current score: 0.0000^CStopping...
 (base) alexworking@DN51qo52 current copy % 
 
 
-here is the console output when I run the test-wake command on Raspberry Pi with linux.
+Here is the console output when i run the test-wake command on Linux/Raspberry Pi.
+

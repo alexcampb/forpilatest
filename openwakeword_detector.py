@@ -17,15 +17,15 @@ import warnings
 import ctypes
 import ctypes.util
 
-# Suppress ALSA errors by redirecting stderr
+# Suppress ALSA errors
 try:
-    # Load the ALSA error handler
+    # Find the ALSA library
     asound = ctypes.CDLL(ctypes.util.find_library('asound'))
-    # Set error handler
+    # Set error handler to ignore errors
     error_handler = ctypes.c_void_p()
     asound.snd_lib_error_set_handler(error_handler)
 except:
-    # If loading ALSA library fails, use basic stderr redirection
+    # If we can't load ALSA, redirect stderr
     devnull = os.open(os.devnull, os.O_WRONLY)
     old_stderr = os.dup(2)
     sys.stderr.flush()
@@ -70,7 +70,7 @@ def check_audio_input():
     
     return input_devices
 
-# Check for audio input devices
+# Check for audio input devices first
 input_devices = check_audio_input()
 if not input_devices:
     print("\nError: No audio input devices found!")
