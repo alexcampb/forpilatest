@@ -1,6 +1,23 @@
 import { Buffer } from 'buffer';
 import os from 'os';
-import Speaker from 'speaker';
+
+async function loadSpeaker() {
+  if (os.arch() === 'arm64' && os.platform() === 'linux') {
+    try {
+      return (await import('speaker-arm64')).default;
+    } catch (error) {
+      console.error('Failed to load speaker-arm64:', error);
+      return null;
+    }
+  } else {
+    try {
+      return (await import('speaker')).default;
+    } catch (error) {
+      console.error('Failed to load speaker:', error);
+      return null;
+    }
+  }
+}
 
 /**
  * Handles audio output functionality including speaker management and playback
@@ -29,11 +46,16 @@ export class AudioOutput {
    * Initialize speaker for audio playback
    * @private
    */
-  initializeSpeaker() {
+  async initializeSpeaker() {
     if (!this.speakerInitialized && !this.isCleaningUp) {
       try {
         if (this.speaker) {
           this.cleanupSpeaker();
+        }
+
+        const Speaker = await loadSpeaker();
+        if (!Speaker) {
+          throw new Error('No speaker module available');
         }
 
         this.speaker = new Speaker({
@@ -78,10 +100,10 @@ export class AudioOutput {
   /**
    * Process audio queue for playback
    */
-  processAudioQueue() {
+  async processAudioQueue() {
     if (!this.isPlaying && !this.isCleaningUp && this.audioQueue.length > 0) {
       if (!this.speakerInitialized) {
-        this.initializeSpeaker();
+        await this.initializeSpeaker();
       }
 
       if (this.speaker) {
