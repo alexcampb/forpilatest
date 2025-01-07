@@ -44,9 +44,18 @@ os.makedirs("debug_audio", exist_ok=True)
 # Initialize wake word detection
 logger.info("Initializing wake word detection...")
 download_models(["hey_jarvis"])
+
+# Choose inference framework based on platform
+if platform.system() == 'Linux' and platform.machine() in ['aarch64', 'armv7l']:
+    inference_framework = "tflite"  # Use TFLite on ARM-based Linux (Raspberry Pi)
+    logger.info("Using TensorFlow Lite for ARM processor")
+else:
+    inference_framework = "onnx"    # Use ONNX on other platforms (like macOS)
+    logger.info("Using ONNX inference framework")
+
 model = openwakeword.Model(
     wakeword_models=["hey_jarvis"],
-    inference_framework="onnx"
+    inference_framework=inference_framework
 )
 
 # Audio settings
@@ -54,6 +63,8 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000  # Default rate
 CHUNK = 4096  # Increased buffer size for higher sample rates
+DETECTION_THRESHOLD = 0.65  # Increased detection threshold
+COOLDOWN_CHUNKS = 15  # Number of chunks to wait before allowing another detection
 
 def get_supported_sample_rate(p, device_index, preferred_rate=16000):
     """Get a supported sample rate for the device"""
@@ -183,6 +194,7 @@ try:
 
     audio_buffer = []
     collecting = False
+    cooldown_counter = 0
     while True:
         try:
             # Read audio data
@@ -200,14 +212,16 @@ try:
             # Print score without newline
             print(f"\rCurrent score: {current_score:.4f}", end='', flush=True)
             
-            # Print detection message when score is high enough
-            if current_score > 0.5:
+            # Print detection message when score is high enough and not in cooldown
+            if current_score > DETECTION_THRESHOLD and not collecting:
                 print(f"\nDETECTED! Score: {current_score:.4f}")
+                cooldown_counter = COOLDOWN_CHUNKS  # Start cooldown
             
             # Start collecting audio if score is high
             if current_score > 0.4:
-                collecting = True
-                audio_buffer = [audio_block]  # Start with current block
+                if not collecting:  # Only start collecting if we weren't already
+                    collecting = True
+                    audio_buffer = [audio_block]  # Start with current block
             elif collecting:
                 audio_buffer.append(audio_block)
                 
@@ -219,6 +233,10 @@ try:
                         buffer_audio = np.concatenate(audio_buffer)
                         filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
                         sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)  # Always save at 16000 Hz
+            
+            # Update cooldown
+            if cooldown_counter > 0:
+                cooldown_counter -= 1
         except Exception as e:
             print(f"Error: {e}")
 except KeyboardInterrupt:
