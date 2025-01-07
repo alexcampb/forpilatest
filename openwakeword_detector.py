@@ -91,6 +91,7 @@ if device_index is None:
 p = pyaudio.PyAudio()
 try:
     logger.info("\nStarting audio capture...")
+    logger.info(f"Using audio device: {device_info['name']}")
     stream = p.open(
         format=FORMAT,
         channels=CHANNELS,
