@@ -49,11 +49,39 @@ model = openwakeword.Model(
     inference_framework="onnx"
 )
 
-# Audio parameters
+# Audio settings
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 16000
+RATE = 16000  # Default rate
 CHUNK = 1280
+
+def get_supported_sample_rate(p, device_index, preferred_rate=16000):
+    """Get a supported sample rate for the device"""
+    try:
+        # Try the preferred rate first
+        p.is_format_supported(
+            preferred_rate,
+            input_device=device_index,
+            input_channels=CHANNELS,
+            input_format=FORMAT
+        )
+        return preferred_rate
+    except:
+        # If preferred rate fails, try common rates
+        common_rates = [44100, 48000, 32000, 22050, 16000, 8000]
+        for rate in common_rates:
+            try:
+                p.is_format_supported(
+                    rate,
+                    input_device=device_index,
+                    input_channels=CHANNELS,
+                    input_format=FORMAT
+                )
+                logger.info(f"Using alternative sample rate: {rate} Hz")
+                return rate
+            except:
+                continue
+    return None
 
 def find_input_device():
     """Find available audio input device"""
@@ -113,10 +141,17 @@ try:
     logger.info("\nStarting audio capture...")
     if device_info:
         logger.info(f"Using audio device: {device_info['name']}")
+    
+    # Get supported sample rate
+    sample_rate = get_supported_sample_rate(p, device_index)
+    if sample_rate is None:
+        logger.error("Could not find a supported sample rate for the device")
+        sys.exit(1)
+    
     stream = p.open(
         format=FORMAT,
         channels=CHANNELS,
-        rate=RATE,
+        rate=sample_rate,
         input=True,
         input_device_index=device_index,
         frames_per_buffer=CHUNK
@@ -166,7 +201,7 @@ try:
                 timestamp = datetime.now().strftime("%H-%M-%S")
                 buffer_audio = np.concatenate(audio_buffer)
                 filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
-                sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, RATE)
+                sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, sample_rate)
             
 except KeyboardInterrupt:
     print("Stopping...")
