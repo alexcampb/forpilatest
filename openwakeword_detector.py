@@ -17,6 +17,7 @@ import warnings
 import ctypes
 import ctypes.util
 import platform
+import time
 
 # Completely suppress ALSA errors
 os.environ['PYTHONWARNINGS'] = 'ignore::RuntimeWarning'
@@ -178,6 +179,13 @@ try:
         audio_buffer = []
         collecting = False
         cooldown_counter = 0
+        last_score_print_time = time.time()
+        
+        # Clear the console and print initial message
+        print("\033[H\033[J")  # Clear screen
+        print("Listening for 'Hey Jarvis'... (Press Ctrl+C to exit)")
+        print("-" * 50)
+        
         while True:
             try:
                 # Read audio data
@@ -192,37 +200,50 @@ try:
                 prediction = model.predict(audio_block)
                 current_score = prediction['hey_jarvis']
                 
-                # Print score without newline
-                print(f"\rCurrent score: {current_score:.4f}", end='', flush=True)
+                # Update score display every 100ms
+                current_time = time.time()
+                if current_time - last_score_print_time > 0.1:
+                    print(f"\rScore: {current_score:.3f}  ", end='', flush=True)
+                    last_score_print_time = current_time
                 
-                # Print detection message when score is high enough and not in cooldown
-                if current_score > 0.65 and not collecting:
-                    print(f"\nDETECTED! Score: {current_score:.4f}")
+                # Handle detection
+                if current_score > 0.65 and cooldown_counter == 0:
+                    # Clear previous line and print detection
+                    print("\r" + " " * 50, end='\r')  # Clear the score line
+                    print(f"\rDETECTED! Score: {current_score:.3f}")
+                    print("-" * 50)
                     cooldown_counter = 15  # Start cooldown
+                    
+                    # Save audio if we were collecting
+                    if collecting and audio_buffer:
+                        timestamp = datetime.now().strftime("%H-%M-%S")
+                        buffer_audio = np.concatenate(audio_buffer)
+                        filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
+                        sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)
+                    
+                    # Reset collection state
+                    collecting = False
+                    audio_buffer = []
                 
-                # Start collecting audio if score is high
+                # Collect audio around potential detections
                 if current_score > 0.4:
-                    if not collecting:  # Only start collecting if we weren't already
+                    if not collecting:
                         collecting = True
-                        audio_buffer = [audio_block]  # Start with current block
+                        audio_buffer = [audio_block]
+                    else:
+                        audio_buffer.append(audio_block)
                 elif collecting:
                     audio_buffer.append(audio_block)
-                    
-                    # Save if we've collected enough or score drops
-                    if len(audio_buffer) > 10 or current_score < 0.2:
+                    if len(audio_buffer) > 10:  # Limit buffer size
                         collecting = False
-                        if len(audio_buffer) > 2:  # Only save if we have enough audio
-                            timestamp = datetime.now().strftime("%H-%M-%S")
-                            buffer_audio = np.concatenate(audio_buffer)
-                            filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
-                            sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)  # Always save at 16000 Hz
+                        audio_buffer = []
                 
                 # Update cooldown
                 if cooldown_counter > 0:
                     cooldown_counter -= 1
 
             except KeyboardInterrupt:
-                logger.info("\nStopping...")
+                print("\n\nStopping...")
                 break
             except Exception as e:
                 logger.error(f"Error in detection loop: {str(e)}")
