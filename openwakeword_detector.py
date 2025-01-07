@@ -53,7 +53,7 @@ model = openwakeword.Model(
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000  # Default rate
-CHUNK = 1280
+CHUNK = 4096  # Increased buffer size for higher sample rates
 
 def get_supported_sample_rate(p, device_index, preferred_rate=16000):
     """Get a supported sample rate for the device"""
@@ -121,6 +121,18 @@ def find_input_device():
         p.terminate()
     return None, None
 
+def resample_audio(audio_data, from_rate, to_rate):
+    """Resample audio data to target rate"""
+    if from_rate == to_rate:
+        return audio_data
+    duration = len(audio_data) / from_rate
+    target_length = int(duration * to_rate)
+    return np.interp(
+        np.linspace(0, len(audio_data), target_length, endpoint=False),
+        np.arange(len(audio_data)),
+        audio_data
+    )
+
 # Find audio input device
 device_index, device_info = find_input_device()
 if device_index is None:
@@ -159,54 +171,54 @@ try:
 
     logger.info("Ready! Say 'Hey Jarvis' to test wake word detection")
     logger.info("(Audio samples will be saved to the debug_audio folder)")
-
-    logger.info("#" * 50)
+    print("#" * 50)
     logger.info("Listening for wake word 'Hey Jarvis'...")
-    logger.info("#" * 50)
+    print("#" * 50)
+    
     logger.info("Note: When speaking, try to:")
     logger.info("1. Speak clearly and at a normal volume")
     logger.info("2. Be in a quiet environment")
     logger.info("3. Say 'Hey Jarvis' naturally")
     logger.info("Any detected audio will be saved to the 'debug_audio' folder")
 
-    # Keep a buffer of recent audio for debugging
     audio_buffer = []
-    BUFFER_CHUNKS = 20  # Keep about 1.6 seconds of audio
-
+    collecting = False
     while True:
-        # Get audio
-        audio_data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
-        
-        # Get prediction scores from the model
-        prediction = model.predict(audio_data)
-        
-        # Get the scores from the prediction buffer
-        scores = list(model.prediction_buffer["hey_jarvis"])
-        current_score = scores[-1]  # Get the latest score
-        
-        # Clear line and update score (improved formatting)
-        print(f"\rCurrent score: {current_score:.4f}", flush=True, end='')
-        if current_score > 0.55:
-            print(f"\nDETECTED! Score: {current_score:.4f}", flush=True)
-        
-        # If we detect something, save the audio for debugging
-        if current_score > 0.1:
-            # Update audio buffer
-            audio_buffer.append(audio_data.copy())
-            if len(audio_buffer) > BUFFER_CHUNKS:
-                audio_buffer.pop(0)
-                
-            # Save the audio buffer if detection is strong
-            if current_score > 0.5:
-                timestamp = datetime.now().strftime("%H-%M-%S")
-                buffer_audio = np.concatenate(audio_buffer)
-                filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
-                sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, sample_rate)
+        try:
+            # Read audio data
+            data = stream.read(CHUNK, exception_on_overflow=False)
+            audio_block = np.frombuffer(data, dtype=np.int16)
             
+            # Resample to 16000 Hz if needed (model expects this rate)
+            if sample_rate != 16000:
+                audio_block = resample_audio(audio_block, sample_rate, 16000)
+            
+            # Get prediction
+            prediction = model.predict(audio_block)
+            current_score = prediction['hey_jarvis']
+            
+            # Print score without newline
+            print(f"\rCurrent score: {current_score:.4f}", end='', flush=True)
+            
+            # Start collecting audio if score is high
+            if current_score > 0.4:
+                collecting = True
+                audio_buffer = [audio_block]  # Start with current block
+            elif collecting:
+                audio_buffer.append(audio_block)
+                
+                # Save if we've collected enough or score drops
+                if len(audio_buffer) > 10 or current_score < 0.2:
+                    collecting = False
+                    if len(audio_buffer) > 2:  # Only save if we have enough audio
+                        timestamp = datetime.now().strftime("%H-%M-%S")
+                        buffer_audio = np.concatenate(audio_buffer)
+                        filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
+                        sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)  # Always save at 16000 Hz
+        except Exception as e:
+            print(f"Error: {e}")
 except KeyboardInterrupt:
     print("Stopping...")
-except Exception as e:
-    print(f"Error: {e}")
 finally:
     # Clean up
     if 'stream' in locals():
