@@ -180,10 +180,10 @@ try:
         collecting = False
         cooldown_counter = 0
         last_score_print_time = time.time()
+        high_score_count = 0
         
-        # Clear the console and print initial message
-        print("\033[H\033[J")  # Clear screen
-        print("Listening for 'Hey Jarvis'... (Press Ctrl+C to exit)")
+        # Print initial message without clearing screen
+        print("\nListening for 'Hey Jarvis'... (Press Ctrl+C to exit)")
         print("-" * 50)
         
         while True:
@@ -203,27 +203,41 @@ try:
                 # Update score display every 100ms
                 current_time = time.time()
                 if current_time - last_score_print_time > 0.1:
-                    print(f"\rScore: {current_score:.3f}  ", end='', flush=True)
+                    # Clear just the score line
+                    print("\r" + " " * 30, end='\r')  # Clear just enough space for the score
+                    print(f"\rScore: {current_score:.3f}", end='', flush=True)
                     last_score_print_time = current_time
                 
-                # Handle detection
-                if current_score > 0.65 and cooldown_counter == 0:
-                    # Clear previous line and print detection
-                    print("\r" + " " * 50, end='\r')  # Clear the score line
-                    print(f"\rDETECTED! Score: {current_score:.3f}")
-                    print("-" * 50)
-                    cooldown_counter = 15  # Start cooldown
-                    
-                    # Save audio if we were collecting
-                    if collecting and audio_buffer:
-                        timestamp = datetime.now().strftime("%H-%M-%S")
-                        buffer_audio = np.concatenate(audio_buffer)
-                        filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
-                        sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)
-                    
-                    # Reset collection state
-                    collecting = False
-                    audio_buffer = []
+                # Handle detection with improved reliability
+                if current_score > 0.65:
+                    if not collecting:
+                        collecting = True
+                        audio_buffer = [audio_block]
+                        high_score_count = 1
+                    else:
+                        high_score_count += 1
+                        
+                    # Trigger detection if we see high scores consistently
+                    if high_score_count >= 2 and cooldown_counter == 0:  # Require 2 consecutive high scores
+                        # Clear just the score line and print detection
+                        print("\r" + " " * 30, end='\r')  # Clear just the score line
+                        print(f"\rDETECTED! Score: {current_score:.3f}")
+                        print("-" * 50)
+                        cooldown_counter = 10  # Reduced cooldown period
+                        
+                        # Save audio if we were collecting
+                        if audio_buffer:
+                            timestamp = datetime.now().strftime("%H-%M-%S")
+                            buffer_audio = np.concatenate(audio_buffer)
+                            filename = f"debug_audio/detection_{timestamp}_{current_score:.3f}.wav"
+                            sf.write(filename, buffer_audio.astype(np.float32) / 32768.0, 16000)
+                        
+                        # Reset collection state
+                        collecting = False
+                        audio_buffer = []
+                        high_score_count = 0
+                else:
+                    high_score_count = 0
                 
                 # Collect audio around potential detections
                 if current_score > 0.4:
