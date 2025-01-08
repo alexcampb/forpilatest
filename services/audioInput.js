@@ -2,6 +2,28 @@ import os from 'os';
 import { Buffer } from 'buffer';
 import recorder from 'node-record-lpcm16';
 import { spawn } from 'child_process';
+import { execSync } from 'child_process';
+
+// Function to get default audio device info
+function getDefaultAudioDevice() {
+  try {
+    if (os.platform() === 'linux') {
+      // Try wpctl first (PipeWire)
+      try {
+        const wpctlOutput = execSync('wpctl status | grep "Sources:" -A 1').toString();
+        const match = wpctlOutput.match(/\*\s+\d+\.\s+(.*?)\s+\[/);
+        if (match) return `PipeWire Default Source: ${match[1]}`;
+      } catch (e) {
+        // wpctl failed, try arecord
+        const arecordOutput = execSync('arecord -L | grep -A1 "^default"').toString();
+        return `ALSA Default Device: ${arecordOutput.split('\n')[1].trim()}`;
+      }
+    }
+    return 'Default system device';
+  } catch (err) {
+    return 'Could not determine default device';
+  }
+}
 
 // Platform-specific audio settings
 export const audioSettings = {
@@ -135,7 +157,9 @@ export class AudioInput {
     this.pendingStopRecording = false;
 
     try {
+      const defaultDevice = getDefaultAudioDevice();
       this.recording = recorder.record(audioSettings);
+      console.log('Default audio device:', defaultDevice);
       console.log('Recording started with settings:', audioSettings);
 
       this.audioBuffer = Buffer.alloc(0);
