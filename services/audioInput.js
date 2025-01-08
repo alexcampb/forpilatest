@@ -8,7 +8,7 @@ export const audioSettings = {
   sampleRate: 16000,  // OpenAI expects 16kHz
   channels: 1,
   bitDepth: 16,
-  device: os.platform() === 'linux' ? 'pipewire' : 'default',
+  device: os.platform() === 'linux' ? 'pulse' : 'default',  // Using pulse instead of pipewire
   encoding: os.platform() === 'linux' ? 'signed-integer' : undefined,
   format: 'raw'
 };
