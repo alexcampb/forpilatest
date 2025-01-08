@@ -186,6 +186,9 @@ try:
         print("\nListening for 'Hey Jarvis'... (Press Ctrl+C to exit)")
         print("-" * 50)
         
+        # Create a dedicated line for score display
+        print("Current Score: ", end='', flush=True)
+        
         while True:
             try:
                 # Read audio data
@@ -203,9 +206,8 @@ try:
                 # Update score display every 100ms
                 current_time = time.time()
                 if current_time - last_score_print_time > 0.1:
-                    # Clear just the score line
-                    print("\r" + " " * 30, end='\r')  # Clear just enough space for the score
-                    print(f"\rScore: {current_score:.3f}", end='', flush=True)
+                    # Clear just the score number, keeping "Current Score: " label
+                    print(f"\r{' ' * 40}\rCurrent Score: {current_score:.3f}", end='', flush=True)
                     last_score_print_time = current_time
                 
                 # Handle detection with improved reliability
@@ -218,11 +220,11 @@ try:
                         high_score_count += 1
                         
                     # Trigger detection if we see high scores consistently
-                    if high_score_count >= 2 and cooldown_counter == 0:  # Require 2 consecutive high scores
-                        # Clear just the score line and print detection
-                        print("\r" + " " * 30, end='\r')  # Clear just the score line
-                        print(f"\rDETECTED! Score: {current_score:.3f}")
+                    if high_score_count >= 2 and cooldown_counter == 0:
+                        print("\n" + "-" * 50)  # Add separator line
+                        print(f"DETECTED! Score: {current_score:.3f}")
                         print("-" * 50)
+                        print("Current Score: ", end='', flush=True)  # Reset score display line
                         cooldown_counter = 10  # Reduced cooldown period
                         
                         # Save audio if we were collecting
