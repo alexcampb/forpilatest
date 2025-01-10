@@ -162,60 +162,78 @@ export class AudioInput {
     this.speechDetected = false;
     this.pendingStopRecording = false;
 
-    try {
-      const defaultDevice = getDefaultAudioDevice();
-      console.log('Initializing audio device:', defaultDevice);
-      
-      // On Linux, verify the device exists before trying to use it
-      if (os.platform() === 'linux') {
-        try {
-          const devices = execSync('arecord -l').toString();
-          if (!devices.includes('P10S')) {
-            throw new Error('P10S device not found');
+    // Add retry logic
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        const defaultDevice = getDefaultAudioDevice();
+        console.log('Initializing audio device:', defaultDevice);
+        
+        // On Linux, verify the device exists before trying to use it
+        if (os.platform() === 'linux') {
+          try {
+            const devices = execSync('arecord -l').toString();
+            if (!devices.includes('P10S')) {
+              throw new Error('P10S device not found');
+            }
+            console.log('Found P10S device, proceeding with recording');
+          } catch (err) {
+            console.error('Error checking audio device:', err);
+            throw new Error('Could not verify audio device');
           }
-          console.log('Found P10S device, proceeding with recording');
-        } catch (err) {
-          console.error('Error checking audio device:', err);
-          throw new Error('Could not verify audio device');
+        }
+
+        // Wait a moment before trying to access the device
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        this.recording = recorder.record({
+          ...audioSettings,
+          device: os.platform() === 'linux' ? 'plughw:3,0' : 'default',
+          channels: 1,
+          sampleRate: 16000,
+          threshold: 0.5,
+          keepSilence: true,
+          endOnSilence: false
+        });
+
+        console.log('Recording started with settings:', {
+          ...audioSettings,
+          device: os.platform() === 'linux' ? 'plughw:3,0' : 'default'
+        });
+
+        this.audioBuffer = Buffer.alloc(0);
+        let totalBytesProcessed = 0;
+
+        this.recording.stream()
+          .on('error', this._handleRecordingError.bind(this))
+          .on('data', this._handleAudioData.bind(this));
+
+        console.log('Audio recording initialized with device:', audioSettings.device);
+        break; // Success, exit retry loop
+      } catch (err) {
+        console.error(`Attempt ${retryCount + 1} failed:`, err.message);
+        if (this.recording) {
+          this.recording.stop();
+          this.recording = null;
+        }
+        this.audioBuffer = Buffer.alloc(0);
+        
+        retryCount++;
+        if (retryCount < maxRetries) {
+          console.log(`Retrying in ${retryCount * 500}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryCount * 500));
+        } else {
+          console.error('Failed to start recording after multiple attempts');
+          if (os.platform() === 'linux') {
+            console.error('Audio device error. Please check:');
+            console.error('1. P10S device is properly connected');
+            console.error('2. ALSA/PipeWire is properly configured');
+            console.error('3. User has proper permissions (audio group)');
+          }
         }
       }
-
-      this.recording = recorder.record({
-        ...audioSettings,
-        device: os.platform() === 'linux' ? 'plughw:3,0' : 'default',
-        channels: 1,
-        sampleRate: 16000,
-        threshold: 0.5,
-        keepSilence: true,
-        endOnSilence: false
-      });
-
-      console.log('Recording started with settings:', {
-        ...audioSettings,
-        device: os.platform() === 'linux' ? 'plughw:3,0' : 'default'
-      });
-
-      this.audioBuffer = Buffer.alloc(0);
-      let totalBytesProcessed = 0;
-
-      this.recording.stream()
-        .on('error', this._handleRecordingError.bind(this))
-        .on('data', this._handleAudioData.bind(this));
-
-      console.log('Audio recording initialized with device:', audioSettings.device);
-    } catch (err) {
-      console.error('Error starting recording:', err.message);
-      if (os.platform() === 'linux') {
-        console.error('Audio device error. Please check:');
-        console.error('1. P10S device is properly connected');
-        console.error('2. ALSA/PipeWire is properly configured');
-        console.error('3. User has proper permissions (audio group)');
-      }
-      if (this.recording) {
-        this.recording.stop();
-        this.recording = null;
-      }
-      this.audioBuffer = Buffer.alloc(0);
     }
   }
 

@@ -225,7 +225,10 @@ try:
                         print(f"DETECTED! Score: {current_score:.3f}")
                         print("-" * 50)
                         print("Current Score: ", end='', flush=True)  # Reset score display line
-                        cooldown_counter = 10  # Reduced cooldown period
+                        
+                        # Release the audio stream temporarily
+                        stream.stop_stream()
+                        time.sleep(0.1)  # Give a moment for the device to be released
                         
                         # Save audio if we were collecting
                         if audio_buffer:
@@ -238,6 +241,11 @@ try:
                         collecting = False
                         audio_buffer = []
                         high_score_count = 0
+                        cooldown_counter = 10  # Reduced cooldown period
+                        
+                        # Restart the stream after a short delay
+                        time.sleep(0.2)  # Give time for the other process to start
+                        stream.start_stream()
                 else:
                     high_score_count = 0
                 
