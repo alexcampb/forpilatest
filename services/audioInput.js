@@ -175,13 +175,17 @@ export class AudioInput {
       this.recording.stream().on('data', (chunk) => {
         if (this.handler.chat.ws && this.handler.chat.ws.readyState === 1) {
           this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
+          console.log('Audio buffer size:', this.audioBuffer.length, 'bytes');
           if (this.audioBuffer.length >= audioSettings.sampleRate) {
+            console.log('Sending audio buffer to server...');
             this.handler.chat.ws.send(JSON.stringify({
               type: 'input_audio_buffer.append',
               audio: this.audioBuffer.toString('base64')
             }));
             this.audioBuffer = Buffer.alloc(0);
           }
+        } else {
+          console.log('WebSocket state:', this.handler.chat.ws ? this.handler.chat.ws.readyState : 'no websocket');
         }
       });
 
