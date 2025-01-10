@@ -30,8 +30,8 @@ export const audioSettings = {
   sampleRate: 16000,  // OpenAI expects 16kHz
   channels: 1,
   bitDepth: 16,
-  device: 'default',  // Use system default device (works with both PipeWire and PulseAudio)
-  encoding: os.platform() === 'linux' ? 'signed-integer' : undefined,
+  device: os.platform() === 'linux' ? 'plughw:3,0' : 'default',  // Use plughw on Linux, default on other platforms
+  encoding: 'signed-integer',
   format: 'raw'
 };
 
@@ -163,6 +163,8 @@ export class AudioInput {
       console.log('Recording started with settings:', audioSettings);
 
       this.audioBuffer = Buffer.alloc(0);
+      let totalBytesProcessed = 0;  // Track total bytes processed
+
       this.recording.stream().on('error', (err) => {
         console.error('Recording error:', err.message);
         if (this.recording) {
@@ -175,13 +177,20 @@ export class AudioInput {
       this.recording.stream().on('data', (chunk) => {
         if (this.handler.chat.ws && this.handler.chat.ws.readyState === 1) {
           this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
-          console.log('Audio buffer size:', this.audioBuffer.length, 'bytes');
+          totalBytesProcessed += chunk.length;
+          console.log(`Audio buffer size: ${this.audioBuffer.length} bytes (Total processed: ${totalBytesProcessed} bytes)`);
+          
           if (this.audioBuffer.length >= audioSettings.sampleRate) {
             console.log('Sending audio buffer to server...');
-            this.handler.chat.ws.send(JSON.stringify({
-              type: 'input_audio_buffer.append',
-              audio: this.audioBuffer.toString('base64')
-            }));
+            try {
+              this.handler.chat.ws.send(JSON.stringify({
+                type: 'input_audio_buffer.append',
+                audio: this.audioBuffer.toString('base64')
+              }));
+              console.log('Successfully sent audio buffer');
+            } catch (err) {
+              console.error('Error sending audio buffer:', err);
+            }
             this.audioBuffer = Buffer.alloc(0);
           }
         } else {
@@ -189,7 +198,7 @@ export class AudioInput {
         }
       });
 
-      console.log('Receiving audio data from microphone');
+      console.log('Audio recording initialized with device:', audioSettings.device);
     } catch (err) {
       console.error('Error starting recording:', err.message);
       if (os.platform() === 'linux') {
