@@ -8,19 +8,34 @@ import { execSync } from 'child_process';
 function getDefaultAudioDevice() {
   try {
     if (os.platform() === 'linux') {
-      // Try wpctl first (PipeWire)
+      // Try to find P10S device first
+      try {
+        const arecordOutput = execSync('arecord -l').toString();
+        if (arecordOutput.includes('P10S')) {
+          return 'P10S USB Audio Device';
+        }
+      } catch (e) {
+        console.error('Error checking for P10S device:', e);
+      }
+
+      // Then try PipeWire
       try {
         const wpctlOutput = execSync('wpctl status | grep "Sources:" -A 1').toString();
         const match = wpctlOutput.match(/\*\s+\d+\.\s+(.*?)\s+\[/);
         if (match) return `PipeWire Default Source: ${match[1]}`;
       } catch (e) {
         // wpctl failed, try arecord
-        const arecordOutput = execSync('arecord -L | grep -A1 "^default"').toString();
-        return `ALSA Default Device: ${arecordOutput.split('\n')[1].trim()}`;
+        try {
+          const arecordOutput = execSync('arecord -L | grep -A1 "^default"').toString();
+          return `ALSA Default Device: ${arecordOutput.split('\n')[1].trim()}`;
+        } catch (err) {
+          console.error('Error getting ALSA device:', err);
+        }
       }
     }
     return 'Default system device';
   } catch (err) {
+    console.error('Error getting audio device:', err);
     return 'Could not determine default device';
   }
 }
@@ -30,7 +45,7 @@ export const audioSettings = {
   sampleRate: 16000,  // OpenAI expects 16kHz
   channels: 1,
   bitDepth: 16,
-  device: os.platform() === 'linux' ? 'plughw:3,0' : 'default',  // Use plughw on Linux, default on other platforms
+  device: os.platform() === 'linux' ? 'plughw:3,0' : 'default',  // Use P10S device on Linux
   encoding: 'signed-integer',
   format: 'raw'
 };
@@ -140,16 +155,7 @@ export class AudioInput {
     }
   }
 
-  /**
-   * Start recording audio
-   */
-  startRecording() {
-    // Don't start recording if speaker is playing or we're processing a function
-    if (this.handler.audioOutput.isPlaying || this.handler.chat.isWaitingForResponse) {
-      console.log('\nCannot start recording while speaker is playing or processing a function');
-      return;
-    }
-
+  async startRecording() {
     if (this.recording) return;
     
     this.isListeningForWakeWord = false;
@@ -158,58 +164,92 @@ export class AudioInput {
 
     try {
       const defaultDevice = getDefaultAudioDevice();
-      this.recording = recorder.record(audioSettings);
-      console.log('Default audio device:', defaultDevice);
-      console.log('Recording started with settings:', audioSettings);
+      console.log('Initializing audio device:', defaultDevice);
+      
+      // On Linux, verify the device exists before trying to use it
+      if (os.platform() === 'linux') {
+        try {
+          const devices = execSync('arecord -l').toString();
+          if (!devices.includes('P10S')) {
+            throw new Error('P10S device not found');
+          }
+          console.log('Found P10S device, proceeding with recording');
+        } catch (err) {
+          console.error('Error checking audio device:', err);
+          throw new Error('Could not verify audio device');
+        }
+      }
+
+      this.recording = recorder.record({
+        ...audioSettings,
+        device: os.platform() === 'linux' ? 'plughw:3,0' : 'default',
+        channels: 1,
+        sampleRate: 16000,
+        threshold: 0.5,
+        keepSilence: true,
+        endOnSilence: false
+      });
+
+      console.log('Recording started with settings:', {
+        ...audioSettings,
+        device: os.platform() === 'linux' ? 'plughw:3,0' : 'default'
+      });
 
       this.audioBuffer = Buffer.alloc(0);
-      let totalBytesProcessed = 0;  // Track total bytes processed
+      let totalBytesProcessed = 0;
 
-      this.recording.stream().on('error', (err) => {
-        console.error('Recording error:', err.message);
-        if (this.recording) {
-          this.recording.stop();
-          this.recording = null;
-        }
-        this.audioBuffer = Buffer.alloc(0);
-      });
-
-      this.recording.stream().on('data', (chunk) => {
-        if (this.handler.chat.ws && this.handler.chat.ws.readyState === 1) {
-          this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
-          totalBytesProcessed += chunk.length;
-          console.log(`Audio buffer size: ${this.audioBuffer.length} bytes (Total processed: ${totalBytesProcessed} bytes)`);
-          
-          if (this.audioBuffer.length >= audioSettings.sampleRate) {
-            console.log('Sending audio buffer to server...');
-            try {
-              this.handler.chat.ws.send(JSON.stringify({
-                type: 'input_audio_buffer.append',
-                audio: this.audioBuffer.toString('base64')
-              }));
-              console.log('Successfully sent audio buffer');
-            } catch (err) {
-              console.error('Error sending audio buffer:', err);
-            }
-            this.audioBuffer = Buffer.alloc(0);
-          }
-        } else {
-          console.log('WebSocket state:', this.handler.chat.ws ? this.handler.chat.ws.readyState : 'no websocket');
-        }
-      });
+      this.recording.stream()
+        .on('error', this._handleRecordingError.bind(this))
+        .on('data', this._handleAudioData.bind(this));
 
       console.log('Audio recording initialized with device:', audioSettings.device);
     } catch (err) {
       console.error('Error starting recording:', err.message);
       if (os.platform() === 'linux') {
-        console.error('On Linux, make sure you have PipeWire installed:');
-        console.error('sudo apt-get install pipewire');
+        console.error('Audio device error. Please check:');
+        console.error('1. P10S device is properly connected');
+        console.error('2. ALSA/PipeWire is properly configured');
+        console.error('3. User has proper permissions (audio group)');
       }
       if (this.recording) {
         this.recording.stop();
         this.recording = null;
       }
       this.audioBuffer = Buffer.alloc(0);
+    }
+  }
+
+  _handleRecordingError(err) {
+    console.error('Recording error:', err.message);
+    if (this.recording) {
+      this.recording.stop();
+      this.recording = null;
+    }
+    this.audioBuffer = Buffer.alloc(0);
+  }
+
+  _handleAudioData(chunk) {
+    if (this.handler.chat.ws && this.handler.chat.ws.readyState === 1) {
+      this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
+      let totalBytesProcessed = 0;
+      totalBytesProcessed += chunk.length;
+      console.log(`Audio buffer size: ${this.audioBuffer.length} bytes (Total processed: ${totalBytesProcessed} bytes)`);
+      
+      if (this.audioBuffer.length >= audioSettings.sampleRate) {
+        console.log('Sending audio buffer to server...');
+        try {
+          this.handler.chat.ws.send(JSON.stringify({
+            type: 'input_audio_buffer.append',
+            audio: this.audioBuffer.toString('base64')
+          }));
+          console.log('Successfully sent audio buffer');
+        } catch (err) {
+          console.error('Error sending audio buffer:', err);
+        }
+        this.audioBuffer = Buffer.alloc(0);
+      }
+    } else {
+      console.log('WebSocket state:', this.handler.chat.ws ? this.handler.chat.ws.readyState : 'no websocket');
     }
   }
 
